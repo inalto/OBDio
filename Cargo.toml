@@ -1,0 +1,30 @@
+[package]
+name = "obdio"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+description = "Lettore diagnostico OBD-II/EOBD in sola lettura per adattatori ELM327 (Carista) su Windows"
+publish = false
+
+[dependencies]
+eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts"] }
+egui_plot = "0.36"
+btleplug = "0.13.5"
+serialport = { version = "4.10", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+uuid = "1"
+png = { version = "0.18", optional = true }
+
+[features]
+# Solo per lo sviluppo: collaudo automatico della GUI in demo con schermate
+# (variabile d'ambiente OBDIO_COLLAUDO=<cartella>). Non incluso nel pacchetto.
+collaudo = ["dep:png"]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
