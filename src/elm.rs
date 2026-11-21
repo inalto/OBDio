@@ -1,8 +1,10 @@
 //! Dialogo ELM327: una richiesta alla volta, attesa del prompt, eco, righe
 //! multiple, ricerca protocollo, NO DATA e timeout.
 //!
-//! I comandi inviabili sono solo quelli di [`AtCommand`] e di
-//! [`ObdRequest`]: non esiste un'interfaccia pubblica per testo arbitrario.
+//! I comandi inviabili sono solo quelli di [`AtCommand`], le letture di
+//! [`ObdRequest`] e la cancellazione dei codici guasto (servizio 04), che
+//! richiede una [`ConfermaCancellazione`]. Non esiste un'interfaccia pubblica
+//! per testo arbitrario.
 
 use std::time::{Duration, Instant};
 
@@ -156,10 +158,93 @@ pub enum Esito {
     Errore(String),
 }
 
+/// Prova che l'utente ha confermato esplicitamente la cancellazione dei
+/// codici guasto. Senza un valore di questo tipo [`Elm::cancella_dtc`] non si
+/// può chiamare. Non è clonabile: ogni conferma vale per un solo invio.
+#[derive(Debug)]
+pub struct ConfermaCancellazione {
+    _privato: (),
+}
+
+impl ConfermaCancellazione {
+    /// Da chiamare SOLO nel gestore della finestra di conferma
+    /// dell'interfaccia (e nelle verifiche), dopo la spunta dell'utente.
+    pub fn utente_ha_confermato() -> Self {
+        ConfermaCancellazione { _privato: () }
+    }
+}
+
+/// Risposta di una centralina alla richiesta di cancellazione.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RispostaCancellazione {
+    /// Risposta positiva (`44`).
+    Accettata,
+    /// Risposta negativa `7F 04 nrc`.
+    Rifiutata { nrc: u8 },
+}
+
+/// Esito della cancellazione per una centralina.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EsitoCentralina {
+    pub ecu: String,
+    pub risposta: RispostaCancellazione,
+}
+
+impl EsitoCentralina {
+    /// Testo per l'utente, senza gergo ELM327.
+    pub fn testo(&self) -> String {
+        match self.risposta {
+            RispostaCancellazione::Accettata => "cancellazione eseguita".into(),
+            RispostaCancellazione::Rifiutata { nrc } => {
+                format!("cancellazione rifiutata: {}", motivo_rifiuto(nrc))
+            }
+        }
+    }
+}
+
+/// Esito complessivo della cancellazione dei codici guasto.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EsitoCancellazione {
+    /// Almeno una centralina ha risposto; esito per ciascuna.
+    Risposte(Vec<EsitoCentralina>),
+    /// Nessuna centralina ha risposto (NO DATA).
+    NessunaRisposta,
+    /// Timeout, errore di bus o risposta non interpretabile: l'esito è incerto.
+    ErroreComunicazione(String),
+}
+
+impl EsitoCancellazione {
+    /// Vero se almeno una centralina ha accettato la cancellazione.
+    pub fn accettata(&self) -> bool {
+        matches!(self, EsitoCancellazione::Risposte(v)
+            if v.iter().any(|e| e.risposta == RispostaCancellazione::Accettata))
+    }
+}
+
+/// Spiegazione in italiano di un codice di risposta negativa al servizio 04.
+pub fn motivo_rifiuto(nrc: u8) -> String {
+    match nrc {
+        0x22 => "condizioni non corrette: di solito il motore deve essere spento con il quadro \
+                 acceso"
+            .into(),
+        0x11 | 0x12 | 0x31 => "non supportato".into(),
+        altro => format!("codice di rifiuto {altro:02X}"),
+    }
+}
+
+/// Testo del comando di cancellazione: servizio 04, senza parametri.
+const COMANDO_CANCELLAZIONE: &str = "04";
+/// Servizio OBD della cancellazione.
+const SERVIZIO_CANCELLAZIONE: u8 = 0x04;
+/// NRC 78: «risposta in preparazione», seguita più tardi dalla risposta vera.
+const NRC_IN_ATTESA: u8 = 0x78;
+
 const T_AT: Duration = Duration::from_secs(3);
 const T_RIAVVIO: Duration = Duration::from_secs(6);
 const T_RICERCA: Duration = Duration::from_secs(25);
 const T_OBD: Duration = Duration::from_secs(4);
+/// Alcune centraline impiegano qualche secondo a cancellare.
+const T_CANCELLAZIONE: Duration = Duration::from_secs(10);
 
 pub struct Elm {
     t: Box<dyn Transport>,
@@ -375,6 +460,59 @@ impl Elm {
         }
     }
 
+    /// Cancella i codici guasto (servizio 04). È l'unica richiesta che
+    /// modifica lo stato della centralina: richiede la conferma dell'utente.
+    /// `Err` significa collegamento caduto (esito sconosciuto).
+    pub fn cancella_dtc(
+        &mut self,
+        conferma: ConfermaCancellazione,
+    ) -> Result<EsitoCancellazione, Scollegato> {
+        let ConfermaCancellazione { _privato: () } = conferma;
+        let righe = match self.scambia(COMANDO_CANCELLAZIONE, T_CANCELLAZIONE, false) {
+            Ok(r) => r,
+            Err(ElmError::Scollegato(m)) => return Err(Scollegato(m)),
+            Err(e) => return Ok(EsitoCancellazione::ErroreComunicazione(e.to_string())),
+        };
+        let dati = match classifica(righe) {
+            Ok(d) => d,
+            Err(ElmError::NoData) => return Ok(EsitoCancellazione::NessunaRisposta),
+            Err(e) => return Ok(EsitoCancellazione::ErroreComunicazione(e.to_string())),
+        };
+        let messaggi = match assemble(&dati, self.kind) {
+            Ok(m) => m,
+            Err(e) => return Ok(EsitoCancellazione::ErroreComunicazione(e.to_string())),
+        };
+        let mut esiti: Vec<EsitoCentralina> = Vec::new();
+        for m in messaggi {
+            let risposta = match m.data.as_slice() {
+                [b, ..] if *b == SERVIZIO_CANCELLAZIONE + 0x40 => RispostaCancellazione::Accettata,
+                [0x7F, s, nrc, ..] if *s == SERVIZIO_CANCELLAZIONE && *nrc != NRC_IN_ATTESA => {
+                    RispostaCancellazione::Rifiutata { nrc: *nrc }
+                }
+                _ => continue,
+            };
+            // Una centralina risponde una volta sola; se compare due volte vale
+            // la risposta positiva.
+            match esiti.iter_mut().find(|e| e.ecu == m.ecu) {
+                Some(e) => {
+                    if risposta == RispostaCancellazione::Accettata {
+                        e.risposta = risposta;
+                    }
+                }
+                None => esiti.push(EsitoCentralina {
+                    ecu: m.ecu,
+                    risposta,
+                }),
+            }
+        }
+        if esiti.is_empty() {
+            return Ok(EsitoCancellazione::ErroreComunicazione(
+                "risposta non pertinente alla richiesta di cancellazione".into(),
+            ));
+        }
+        Ok(EsitoCancellazione::Risposte(esiti))
+    }
+
     /// Legge le maschere dei PID supportati oltre il 20 per ogni centralina.
     /// `iniziali` sono i messaggi di risposta a 0100.
     pub fn pid_supportati(
@@ -587,6 +725,89 @@ mod tests {
         let s = &mappa["7E8"];
         assert!(s.contains(&0x0C) && s.contains(&0x21) && s.contains(&0x24));
         assert!(s.contains(&0x42) && s.contains(&0x44) && !s.contains(&0x60));
+    }
+
+    fn cancella(c: Copione) -> (Result<EsitoCancellazione, Scollegato>, String) {
+        let mut e = pronto(c);
+        e.prendi_registro();
+        let esito = e.cancella_dtc(ConfermaCancellazione::utente_ha_confermato());
+        (esito, e.prendi_registro().join("\n"))
+    }
+
+    #[test]
+    fn comando_di_cancellazione_esatto() {
+        assert_eq!(COMANDO_CANCELLAZIONE, "04");
+        let mut c = Copione::con_inizializzazione(20);
+        c.testo("04", "7E8 01 44\r\r>");
+        let (_, registro) = cancella(c);
+        // Il comando inviato è esattamente «04» e compare nel registro.
+        assert!(registro.starts_with("→ 04   ← "), "{registro}");
+    }
+
+    #[test]
+    fn cancellazione_accettata_da_una_centralina() {
+        let mut c = Copione::con_inizializzazione(4);
+        c.testo("04", "7E8 01 44 AA AA AA AA AA AA\r\r>");
+        let (esito, _) = cancella(c);
+        let esito = esito.unwrap();
+        assert_eq!(
+            esito,
+            EsitoCancellazione::Risposte(vec![EsitoCentralina {
+                ecu: "7E8".into(),
+                risposta: RispostaCancellazione::Accettata,
+            }])
+        );
+        assert!(esito.accettata());
+    }
+
+    #[test]
+    fn cancellazione_accettata_e_rifiutata() {
+        let mut c = Copione::con_inizializzazione(20);
+        c.testo("04", "7E8 01 44\r7E9 03 7F 04 22\r\r>");
+        let (esito, _) = cancella(c);
+        let EsitoCancellazione::Risposte(v) = esito.unwrap() else {
+            panic!()
+        };
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].risposta, RispostaCancellazione::Accettata);
+        assert_eq!(v[1].ecu, "7E9");
+        assert_eq!(
+            v[1].risposta,
+            RispostaCancellazione::Rifiutata { nrc: 0x22 }
+        );
+        assert!(v[1].testo().contains("motore deve essere spento"));
+        assert_eq!(motivo_rifiuto(0x11), "non supportato");
+        assert_eq!(motivo_rifiuto(0x31), "non supportato");
+        assert!(motivo_rifiuto(0x33).contains("33"));
+    }
+
+    #[test]
+    fn cancellazione_senza_risposta() {
+        let mut c = Copione::con_inizializzazione(20);
+        c.testo("04", "NO DATA\r\r>");
+        let (esito, _) = cancella(c);
+        let esito = esito.unwrap();
+        assert_eq!(esito, EsitoCancellazione::NessunaRisposta);
+        assert!(!esito.accettata());
+    }
+
+    #[test]
+    fn cancellazione_con_caduta_del_collegamento() {
+        let mut c = Copione::con_inizializzazione(20);
+        c.sequenza("04", vec![Battuta::Caduta]);
+        let (esito, _) = cancella(c);
+        assert!(esito.is_err());
+    }
+
+    #[test]
+    fn cancellazione_con_errore_di_bus() {
+        let mut c = Copione::con_inizializzazione(20);
+        c.testo("04", "CAN ERROR\r\r>");
+        let (esito, _) = cancella(c);
+        assert!(matches!(
+            esito.unwrap(),
+            EsitoCancellazione::ErroreComunicazione(_)
+        ));
     }
 
     #[test]

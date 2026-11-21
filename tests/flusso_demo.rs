@@ -222,6 +222,178 @@ fn flusso_completo_in_demo() {
 }
 
 #[test]
+fn cancellazione_dei_codici_in_demo() {
+    use obdio::elm::{ConfermaCancellazione, EsitoCancellazione, RispostaCancellazione};
+
+    let dir = cartella("cancellazione");
+    let (tx, rx, handle) = worker::avvia(dir.clone(), || {});
+    let demo = DemoTransport::con_latenza(Duration::from_millis(3));
+    tx.send(Comando::Collega(Sorgente::Trasporto(Box::new(demo))))
+        .unwrap();
+    connessione(&rx);
+
+    // Prima: P0420 nei tre stati.
+    tx.send(Comando::LeggiDiagnosi).unwrap();
+    let prima = attendi(&rx, 20, |e| match e {
+        Evento::Diagnosi(d) => Some(*d),
+        _ => None,
+    });
+    assert_eq!(prima.dtc[0].codice, "P0420");
+    assert_eq!(prima.dtc[0].stati.len(), 3);
+    let vin = prima.vin.clone().expect("VIN demo");
+
+    // Cancellazione confermata.
+    tx.send(Comando::CancellaDtc(
+        ConfermaCancellazione::utente_ha_confermato(),
+    ))
+    .unwrap();
+    let mut stati = Vec::new();
+    let mut marcatori = Vec::new();
+    let risultato = attendi(&rx, 20, |e| match e {
+        Evento::Stato(s) => {
+            stati.push(s);
+            None
+        }
+        Evento::Errore(e) => panic!("errore inatteso: {e:?}"),
+        Evento::CancellazioneDtc(r) => Some(*r),
+        _ => None,
+    });
+    let dopo = attendi(&rx, 20, |e| match e {
+        Evento::Stato(s) => {
+            stati.push(s);
+            None
+        }
+        Evento::Marcatore(m) => {
+            marcatori.push(m.etichetta);
+            None
+        }
+        Evento::Diagnosi(d) => Some(*d),
+        _ => None,
+    });
+    attendi(&rx, 10, |e| {
+        matches!(e, Evento::Stato(StatoConn::Connesso)).then_some(())
+    });
+    assert!(stati.contains(&StatoConn::Cancellazione));
+    assert!(risultato.demo);
+    assert!(risultato.esito.accettata());
+    let EsitoCancellazione::Risposte(v) = &risultato.esito else {
+        panic!("{:?}", risultato.esito)
+    };
+    assert_eq!(v.len(), 1);
+    assert_eq!(v[0].ecu, "7E8");
+    assert_eq!(v[0].risposta, RispostaCancellazione::Accettata);
+    assert_eq!(marcatori, vec![worker::MARCATORE_CANCELLAZIONE.to_string()]);
+
+    // Dopo: resta solo il codice permanente, MIL spenta, niente fermo immagine.
+    assert_eq!(dopo.dtc.len(), 1);
+    assert_eq!(dopo.dtc[0].codice, "P0420");
+    assert_eq!(dopo.dtc[0].stati, vec![StatoDtc::Permanente]);
+    assert_eq!(dopo.lettura_confermati.stato, Stato::Ok);
+    assert_eq!(dopo.lettura_in_sospeso.stato, Stato::Ok);
+    assert!(!dopo.prontezza[0].mil_accesa);
+    assert_eq!(dopo.prontezza[0].numero_dtc, 0);
+    assert!(!dopo.fermo.presente);
+    let catalizzatore = dopo.prontezza[0]
+        .monitor
+        .iter()
+        .find(|m| m.nome == "Catalizzatore")
+        .unwrap();
+    assert!(catalizzatore.disponibile && !catalizzatore.completato);
+    assert_eq!(dopo.mode06.test.len(), 1);
+
+    // Copia della diagnosi precedente: P0420 confermato, senza VIN.
+    let nome = risultato
+        .copia
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        nome.starts_with(recording::PREFISSO_COPIA_DIAGNOSI),
+        "{nome}"
+    );
+    assert!(nome.ends_with("_DEMO.json"), "{nome}");
+    assert_eq!(risultato.copia.parent().unwrap(), dir.as_path());
+    let copia = std::fs::read_to_string(&risultato.copia).unwrap();
+    assert!(copia.contains("P0420"));
+    assert!(copia.contains("\"confermato\""));
+    assert!(copia.contains("\"in_sospeso\""));
+    assert!(!copia.contains(&vin));
+    let riletta: obdio::diagnosis::DiagnosisReport = serde_json::from_str(&copia).unwrap();
+    assert!(riletta.fermo.presente);
+    assert_eq!(riletta.dtc, prima.dtc);
+
+    tx.send(Comando::Esci).unwrap();
+    handle.join().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn cancellazione_rifiutata_senza_collegamento() {
+    use obdio::elm::ConfermaCancellazione;
+
+    let dir = cartella("cancellazione_scollegato");
+    let (tx, rx, handle) = worker::avvia(dir.clone(), || {});
+    tx.send(Comando::CancellaDtc(
+        ConfermaCancellazione::utente_ha_confermato(),
+    ))
+    .unwrap();
+    let e = attendi(&rx, 10, |e| match e {
+        Evento::Errore(e) => Some(e),
+        Evento::CancellazioneDtc(_) => panic!("non doveva cancellare"),
+        _ => None,
+    });
+    assert!(matches!(e, ErroreUtente::CancellazioneNonEseguita(_)));
+    tx.send(Comando::Esci).unwrap();
+    handle.join().unwrap();
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn senza_copia_della_diagnosi_non_si_cancella() {
+    use obdio::elm::ConfermaCancellazione;
+
+    let dir = cartella("cancellazione_senza_copia");
+    // La «cartella delle sessioni» è un file: la copia non si può scrivere.
+    let finta = dir.join("non_una_cartella");
+    std::fs::write(&finta, "x").unwrap();
+    let (tx, rx, handle) = worker::avvia(finta.clone(), || {});
+    let demo = DemoTransport::con_latenza(Duration::from_millis(3));
+    tx.send(Comando::Collega(Sorgente::Trasporto(Box::new(demo))))
+        .unwrap();
+    connessione(&rx);
+    tx.send(Comando::CancellaDtc(
+        ConfermaCancellazione::utente_ha_confermato(),
+    ))
+    .unwrap();
+    let mut registro = Vec::new();
+    let e = attendi(&rx, 20, |e| match e {
+        Evento::Registro(r) => {
+            registro.extend(r);
+            None
+        }
+        Evento::Errore(e) => Some(e),
+        Evento::CancellazioneDtc(_) => panic!("non doveva cancellare senza copia"),
+        _ => None,
+    });
+    assert!(matches!(e, ErroreUtente::CancellazioneNonEseguita(_)));
+    attendi(&rx, 10, |e| {
+        if let Evento::Registro(r) = &e {
+            registro.extend(r.iter().cloned());
+        }
+        matches!(e, Evento::Stato(StatoConn::Connesso)).then_some(())
+    });
+    // La diagnosi è stata letta per la copia, ma il servizio 04 non è partito.
+    assert!(registro.iter().any(|r| r.starts_with("→ 03 ")));
+    assert!(!registro.iter().any(|r| r.starts_with("→ 04 ")));
+    tx.send(Comando::Esci).unwrap();
+    handle.join().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn perdita_del_collegamento_conserva_la_registrazione() {
     let dir = cartella("caduta");
     let (tx, rx, handle) = worker::avvia(dir.clone(), || {});

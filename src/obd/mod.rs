@@ -8,8 +8,10 @@ pub mod readiness;
 
 pub use frames::{BusKind, EcuMessage};
 
-/// Richieste OBD ammesse. L'elenco è chiuso: non esiste modo di inviare
-/// servizi di scrittura o cancellazione (04, 08, 2E, 2F, 31, 3B...).
+/// Richieste OBD di sola lettura. L'elenco è chiuso: da qui non si possono
+/// inviare servizi di scrittura o cancellazione (04, 08, 2E, 2F, 31, 3B...).
+/// La cancellazione dei codici guasto (04) ha un percorso separato che
+/// richiede la conferma dell'utente: `Elm::cancella_dtc`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ObdRequest {
     /// Servizio 01: dato corrente.
@@ -131,6 +133,25 @@ mod tests {
                 matches!(servizio, 0x01 | 0x02 | 0x03 | 0x06 | 0x07 | 0x09 | 0x0A),
                 "servizio non ammesso: {c}"
             );
+        }
+    }
+
+    #[test]
+    fn nessuna_lettura_produce_il_servizio_04() {
+        for p in 0..=u8::MAX {
+            for r in [
+                ObdRequest::CurrentData(p),
+                ObdRequest::FreezeFrame(p),
+                ObdRequest::MonitorResults(p),
+                ObdRequest::StoredDtcs,
+                ObdRequest::PendingDtcs,
+                ObdRequest::PermanentDtcs,
+                ObdRequest::Vin,
+            ] {
+                let c = r.command();
+                assert_ne!(r.service(), 0x04, "{c}");
+                assert!(!c.starts_with("04"), "{c}");
+            }
         }
     }
 }

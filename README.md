@@ -4,9 +4,12 @@ Lettore diagnostico OBD-II/EOBD per Windows 11 x64, pensato per adattatori
 ELM327 Bluetooth come il Carista. Funziona solo in locale: nessun account,
 nessun abbonamento, nessun servizio cloud.
 
-**L'app lavora in sola lettura.** Legge codici guasto, fermo immagine, monitor
-e dati in tempo reale. Non cancella codici, non scrive sulle centraline, non
-esegue test attuatori e non permette di inviare comandi liberi.
+**L'app lavora in lettura, con una sola eccezione.** Legge codici guasto,
+fermo immagine, monitor e dati in tempo reale. L'unica azione che modifica la
+centralina è **Cancella codici guasto** (servizio OBD 04), che va confermata
+esplicitamente: vedi [Cancellare i codici guasto](#cancellare-i-codici-guasto).
+Non scrive sulle centraline, non esegue codifiche né test attuatori e non
+permette di inviare comandi liberi.
 
 Versione 0.1.0. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
 con codice P0420.
@@ -172,6 +175,48 @@ non lo dichiara o lo rifiuta), **Risposta mancante** (dichiarato ma senza
 risposta), **Errore di comunicazione** (timeout, errore di bus, risposta non
 interpretabile).
 
+## Cancellare i codici guasto
+
+Nella scheda **Codici guasto e fermo immagine**, il pulsante rosso
+**Cancella codici guasto…** (a destra, lontano da *Leggi diagnosi*) invia il
+servizio OBD 04. È attivo solo con l'adattatore collegato e nessuna
+operazione in corso, e apre una finestra di conferma: il pulsante di
+cancellazione si abilita solo dopo la spunta «Ho letto e voglio cancellare i
+codici». *Annulla* è il pulsante predefinito; anche Esc annulla.
+
+Cosa succede, nell'ordine:
+
+1. se in questo collegamento non è ancora stata letta la diagnosi, l'app la
+   legge;
+2. salva una copia della diagnosi nella cartella `sessioni`:
+   `diagnosi_prima_cancellazione_AAAA-MM-GG_HH-MM-SS.json` (`_DEMO` in demo),
+   senza VIN. **Se la copia non si può scrivere, la cancellazione non parte**;
+3. invia `04` e mostra l'esito per ogni centralina: eseguita, rifiutata con il
+   motivo (per esempio «condizioni non corrette: di solito il motore deve
+   essere spento con il quadro acceso»), nessuna risposta, oppure errore di
+   comunicazione (esito incerto);
+4. rilegge la diagnosi e la mostra. Se è in corso una registrazione, vi
+   scrive il marcatore «Codici guasto cancellati» e la nuova diagnosi.
+
+Conseguenze della cancellazione (servizio 04):
+
+- spariscono i codici memorizzati e in sospeso, il **fermo immagine** (resta
+  solo nella copia salvata) e i risultati dei monitor (Mode 06); la spia MIL
+  si spegne;
+- i **monitor di prontezza** tornano «non completato» e si azzerano distanza e
+  tempo dalla cancellazione: finché i monitor non si completano (servono uno o
+  più cicli di guida) il veicolo può non superare la revisione;
+- i **codici permanenti** (servizio 0A) **non** si cancellano: li elimina la
+  centralina da sola dopo alcuni cicli senza il guasto;
+- cancellare non ripara nulla: se la causa resta, il codice ricompare.
+
+Condizioni: quadro acceso, motore spento. Con il motore acceso molte
+centraline rifiutano la richiesta.
+
+> **Verifica.** La cancellazione è stata provata solo con il simulatore demo
+> e con risposte a copione (accettata, rifiutata `7F 04 22`, nessuna risposta,
+> collegamento caduto). **Non è mai stata provata su un veicolo.**
+
 ## Stato delle verifiche
 
 ### Adattatori Carista: cosa è documentato
@@ -208,8 +253,11 @@ non è verificabile: è un'ipotesi, non un dato.
 
 | Verifica | Esito |
 |---|---|
-| Test automatici (61): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura | Superati |
+| Test automatici (77): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
 | Flusso demo attraverso il thread di lavoro reale: collegamento, P0420, fermo immagine, polling con priorità alle sonde, registrazione, CSV, riapertura | Superato |
+| Cancellazione dei codici in demo attraverso il thread di lavoro reale: copia della diagnosi, servizio 04, rilettura con P0420 solo permanente, MIL spenta, prontezza azzerata | Superato |
+| Finestra di conferma ed esito della cancellazione nell'interfaccia, in demo | Schermate dal collaudo automatico; clic, Esc e Invio a mano **non provati** |
+| Cancellazione dei codici su un veicolo reale | **Non provata** |
 | Interfaccia in demo, con schermate: connessione, diagnosi, fermo immagine, grafici con buco del dato e marcatori, sessione riaperta | Superato |
 | Scansione BLE reale su un PC Windows 11 | Funziona (dispositivi elencati); nessun Carista presente |
 | Connessione BLE a un adattatore reale | **Non provata** |
@@ -262,18 +310,23 @@ non è verificabile: è un'ipotesi, non un dato.
 ## Comandi inviati
 
 L'elenco è chiuso nel codice (`AtCommand` in `src/elm.rs`, `ObdRequest` in
-`src/obd/mod.rs`) e un test verifica che non si possano generare altri servizi.
+`src/obd/mod.rs`) e un test verifica che le letture non possano generare altri
+servizi, `04` compreso.
 
 - **Adattatore** (configurazione che non tocca il veicolo): `ATZ`, `ATE0`,
   `ATL0`, `ATS0`, `ATH1`, `ATAT1`, `ATSP0`, `ATDPN`, `ATI`, `ATRV`.
   `ATSP0` imposta la scelta automatica del protocollo, che è anche il valore
   di fabbrica; le altre impostazioni si annullano togliendo alimentazione.
-- **Veicolo**, solo servizi di lettura: `01` (dati correnti), `02` (fermo
+- **Veicolo**, servizi di lettura: `01` (dati correnti), `02` (fermo
   immagine), `03`, `07`, `0A` (lettura DTC), `06` (risultati dei monitor),
   `09 02` (VIN).
+- **Veicolo, unica eccezione**: `04` (cancellazione DTC), solo dall'azione
+  confermata *Cancella codici guasto*. Ha un percorso separato
+  (`Elm::cancella_dtc`) che non si può chiamare senza un valore
+  `ConfermaCancellazione`, creato soltanto dalla finestra di conferma.
 
-Mai inviati: `04` (cancellazione DTC), `08`, servizi UDS di scrittura,
-codifica o comando attuatori.
+Mai inviati: `08`, servizi UDS di scrittura, codifica o comando attuatori,
+comandi liberi.
 
 ## Compilare dai sorgenti
 
@@ -297,7 +350,7 @@ Struttura:
 | `obd/` | Decoder: trame e ISO-TP, PID, DTC, prontezza, Mode 06 |
 | `diagnosis.rs` | Lettura di DTC, MIL, prontezza, fermo immagine, Mode 06 |
 | `recording.rs` | Sessioni su disco e CSV |
-| `worker.rs` | Thread di lavoro con stati espliciti: scansione, connessione, diagnosi, polling, registrazione, disconnessione |
+| `worker.rs` | Thread di lavoro con stati espliciti: scansione, connessione, diagnosi, cancellazione, polling, registrazione, disconnessione |
 | `ui/` | Interfaccia egui: non esegue mai I/O verso l'adattatore |
 
 Strumenti di sviluppo:

@@ -1,4 +1,6 @@
-//! Codici guasto (DTC): decodifica e descrizioni dei codici generici più comuni.
+//! Codici guasto (DTC): decodifica e descrizioni (italiane curate e archivio inglese completo).
+
+use std::sync::OnceLock;
 
 use super::frames::BusKind;
 
@@ -105,16 +107,111 @@ pub fn descrizione(codice: &str) -> Option<&'static str> {
     })
 }
 
+/// Elenco dei codici generici (`CODICE<TAB>titolo inglese`), incorporato nel programma.
+/// Origine: OBDex, licenza CC0-1.0; si rigenera con `strumenti/genera_dtc.py`.
+const DATI_GENERICI: &str = include_str!("../../data/dtc_generici.tsv");
+
+/// Elenco ordinato per codice, costruito una sola volta.
+fn elenco() -> &'static [(&'static str, &'static str)] {
+    static ELENCO: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
+    ELENCO.get_or_init(|| {
+        let mut v: Vec<(&'static str, &'static str)> = DATI_GENERICI
+            .lines()
+            .filter_map(|riga| riga.split_once('\t'))
+            .collect();
+        v.sort_unstable_by_key(|(codice, _)| *codice);
+        v
+    })
+}
+
+/// Titolo inglese del codice nell'elenco incorporato, se presente.
+fn titolo_inglese(codice: &str) -> Option<&'static str> {
+    let e = elenco();
+    e.binary_search_by(|(c, _)| (*c).cmp(codice))
+        .ok()
+        .map(|i| e[i].1)
+}
+
+/// Numero di codici presenti nell'elenco incorporato.
+pub fn numero_codici() -> usize {
+    elenco().len()
+}
+
+/// Indica se il codice è generico (uguale per tutte le marche) secondo SAE J2012.
+///
+/// Regola, sul secondo carattere del codice:
+/// - `P`: generici `P0xxx`, `P2xxx` e `P34xx`-`P39xx`; del costruttore `P1xxx` e `P30xx`-`P33xx`;
+/// - `B`, `C`, `U`: generici `0xxx` e `3xxx` (i `B3`/`C3` sono «riservati», trattati come generici);
+///   del costruttore `1xxx` e `2xxx`.
+///
+/// Un codice con forma non valida non è considerato generico.
+pub fn e_generico(codice: &str) -> bool {
+    let b = codice.as_bytes();
+    if b.len() != 5 {
+        return false;
+    }
+    match (b[0], b[1]) {
+        (b'P', b'0') | (b'P', b'2') => true,
+        (b'P', b'3') => matches!(b[2], b'4'..=b'9'),
+        (b'B' | b'C' | b'U', b'0') | (b'B' | b'C' | b'U', b'3') => true,
+        _ => false,
+    }
+}
+
+/// Lingua in cui è scritta una descrizione.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinguaDescrizione {
+    Italiano,
+    Inglese,
+}
+
+/// Descrizione di un codice guasto, con l'indicazione della sua provenienza.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DescrizioneDtc {
+    /// Testo da mostrare.
+    pub testo: String,
+    /// Lingua del testo; `None` se è solo una nota (codice sconosciuto).
+    pub lingua: Option<LinguaDescrizione>,
+    /// `true` se il codice è generico (non specifico del costruttore).
+    pub generico: bool,
+}
+
+/// Descrizione di un codice: italiana se curata, altrimenti il titolo inglese
+/// dell'elenco, altrimenti una nota.
+pub fn descrivi(codice: &str) -> DescrizioneDtc {
+    let generico = e_generico(codice);
+    if let Some(d) = descrizione(codice) {
+        return DescrizioneDtc {
+            testo: d.to_string(),
+            lingua: Some(LinguaDescrizione::Italiano),
+            generico,
+        };
+    }
+    if let Some(t) = titolo_inglese(codice) {
+        return DescrizioneDtc {
+            testo: t.to_string(),
+            lingua: Some(LinguaDescrizione::Inglese),
+            generico,
+        };
+    }
+    let testo = if generico {
+        "Codice non presente nell'elenco"
+    } else {
+        "Codice specifico del costruttore: significato non incluso (varia secondo la marca)"
+    };
+    DescrizioneDtc {
+        testo: testo.to_string(),
+        lingua: None,
+        generico,
+    }
+}
+
 /// Descrizione da mostrare sempre, anche per i codici non in elenco.
 pub fn descrizione_o_nota(codice: &str) -> String {
-    if let Some(d) = descrizione(codice) {
-        return d.to_string();
-    }
-    let costruttore = matches!(codice.as_bytes().get(1), Some(b'1') | Some(b'3'));
-    if costruttore {
-        "Codice specifico del costruttore: descrizione non inclusa".to_string()
-    } else {
-        "Codice generico: descrizione non inclusa nell'elenco dell'app".to_string()
+    let d = descrivi(codice);
+    match d.lingua {
+        Some(LinguaDescrizione::Inglese) => format!("{} (descrizione in inglese)", d.testo),
+        _ => d.testo,
     }
 }
 
@@ -158,6 +255,77 @@ mod tests {
     fn descrizioni() {
         assert!(descrizione("P0420").unwrap().contains("catalizzatore"));
         assert!(descrizione_o_nota("P1336").contains("costruttore"));
-        assert!(descrizione_o_nota("P0999").contains("generico"));
+    }
+
+    #[test]
+    fn descrivi_italiano_curato() {
+        let d = descrivi("P0420");
+        assert_eq!(d.lingua, Some(LinguaDescrizione::Italiano));
+        assert!(d.testo.contains("catalizzatore"));
+        assert!(d.generico);
+    }
+
+    #[test]
+    fn descrivi_solo_in_archivio() {
+        assert!(descrizione("P0C73").is_none());
+        let d = descrivi("P0C73");
+        assert_eq!(d.lingua, Some(LinguaDescrizione::Inglese));
+        assert_eq!(
+            d.testo,
+            "Motor Electronics Coolant Pump A Control Performance"
+        );
+        assert!(descrizione_o_nota("P0C73").ends_with("(descrizione in inglese)"));
+    }
+
+    #[test]
+    fn descrivi_costruttore_e_sconosciuto() {
+        let d = descrivi("P1336");
+        assert!(!d.generico);
+        assert_eq!(d.lingua, None);
+        assert!(d.testo.starts_with("Codice specifico del costruttore"));
+        let n = descrivi("P0FFE");
+        assert!(n.generico);
+        assert_eq!(n.lingua, None);
+        assert_eq!(n.testo, "Codice non presente nell'elenco");
+    }
+
+    #[test]
+    fn classificazione_generico() {
+        for c in [
+            "P0000", "P0420", "P2000", "P3400", "P3999", "B0001", "C0300", "U0100", "B3000",
+            "C3000", "U3000",
+        ] {
+            assert!(e_generico(c), "{c}");
+        }
+        for c in [
+            "P1000", "P1336", "P3000", "P3100", "P3399", "B1000", "B2000", "C1000", "C2000",
+            "U1000", "U2000",
+        ] {
+            assert!(!e_generico(c), "{c}");
+        }
+        assert!(!e_generico("P04"));
+        assert!(!e_generico(""));
+    }
+
+    #[test]
+    fn archivio_completo_e_valido() {
+        assert!(numero_codici() > 9000);
+        let mut n = 0;
+        for riga in DATI_GENERICI.lines() {
+            let (codice, titolo) = riga.split_once('\t').expect(riga);
+            let b = codice.as_bytes();
+            assert!(
+                b.len() == 5
+                    && b"PCBU".contains(&b[0])
+                    && (b'0'..=b'3').contains(&b[1])
+                    && b[2..]
+                        .iter()
+                        .all(|c| c.is_ascii_digit() || (b'A'..=b'F').contains(c)),
+                "codice non valido: {codice}"
+            );
+            assert!(!titolo.trim().is_empty(), "titolo vuoto: {codice}");
+            n += 1;
+        }
+        assert_eq!(n, numero_codici());
     }
 }

@@ -9,7 +9,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use crate::diagnosis::{self, Contesto, DiagnosisReport};
-use crate::elm::{Elm, ElmError, Esito};
+use crate::elm::{ConfermaCancellazione, Elm, ElmError, Esito, EsitoCancellazione};
 use crate::model::{Marker, Sample, Stato, adesso_iso};
 use crate::obd::ObdRequest;
 use crate::obd::frames::BusKind;
@@ -40,6 +40,9 @@ pub enum Comando {
     Collega(Sorgente),
     Scollega,
     LeggiDiagnosi,
+    /// Cancella i codici guasto (servizio 04) dopo aver salvato una copia
+    /// della diagnosi. Richiede la conferma dell'utente.
+    CancellaDtc(ConfermaCancellazione),
     /// Avvia o aggiorna il polling; `prioritarie` sono le chiavi delle sonde.
     AvviaPolling {
         chiavi: Vec<String>,
@@ -61,6 +64,8 @@ pub enum StatoConn {
     Connessione(String),
     Connesso,
     Diagnosi,
+    /// Cancellazione dei codici guasto in corso (copia, invio, rilettura).
+    Cancellazione,
     Disconnessione,
 }
 
@@ -75,6 +80,8 @@ pub enum ErroreUtente {
     CentralinaNonRisponde(String),
     CollegamentoPerso(String),
     Registrazione(String),
+    /// La cancellazione dei codici guasto non è stata nemmeno tentata.
+    CancellazioneNonEseguita(String),
     Altro(String),
 }
 
@@ -89,6 +96,7 @@ impl ErroreUtente {
             ErroreUtente::CentralinaNonRisponde(_) => "La centralina non risponde",
             ErroreUtente::CollegamentoPerso(_) => "Collegamento interrotto",
             ErroreUtente::Registrazione(_) => "Errore di registrazione",
+            ErroreUtente::CancellazioneNonEseguita(_) => "Codici guasto non cancellati",
             ErroreUtente::Altro(_) => "Errore",
         }
     }
@@ -126,6 +134,9 @@ impl ErroreUtente {
                 "Il polling è stato fermato. I dati già registrati sono stati conservati. \
                  Dettaglio: {d}"
             ),
+            ErroreUtente::CancellazioneNonEseguita(d) => {
+                format!("Nessuna richiesta di cancellazione è stata inviata alla centralina. {d}")
+            }
             ErroreUtente::Registrazione(d) | ErroreUtente::Altro(d) => d.clone(),
         }
     }
@@ -157,6 +168,9 @@ pub enum Evento {
     GattSconosciuto(GattInfo),
     Connesso(Box<InfoConn>),
     Diagnosi(Box<DiagnosisReport>),
+    /// Esito della cancellazione dei codici guasto. La diagnosi riletta
+    /// dopo la cancellazione arriva subito dopo come [`Evento::Diagnosi`].
+    CancellazioneDtc(Box<RisultatoCancellazione>),
     Campioni(Vec<Sample>),
     Polling(bool),
     RegistrazioneAvviata {
@@ -176,6 +190,21 @@ pub enum Evento {
     Errore(ErroreUtente),
     Registro(Vec<String>),
 }
+
+/// Esito della cancellazione dei codici guasto visto dall'interfaccia.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RisultatoCancellazione {
+    pub esito: EsitoCancellazione,
+    /// Vero se la cancellazione è avvenuta sul simulatore.
+    pub demo: bool,
+    /// Copia della diagnosi salvata prima della cancellazione.
+    pub copia: PathBuf,
+    pub eseguita_il: String,
+}
+
+/// Etichette dei marcatori scritti nella registrazione.
+pub const MARCATORE_CANCELLAZIONE: &str = "Codici guasto cancellati";
+pub const MARCATORE_CANCELLAZIONE_FALLITA: &str = "Cancellazione dei codici guasto non riuscita";
 
 /// Ordine delle richieste: tutte le prioritarie, poi una delle altre a rotazione.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -241,6 +270,27 @@ struct Link {
     recorder: Option<Recorder>,
     diagnosi: Option<DiagnosisReport>,
     errori_di_fila: u32,
+}
+
+/// Esegue la lettura diagnostica completa sul collegamento.
+fn leggi_su(l: &mut Link) -> Result<DiagnosisReport, crate::transport::Scollegato> {
+    let ctx = Contesto {
+        adattatore: &l.info.adattatore,
+        protocollo: &l.info.protocollo,
+        supportati: &l.info.supportati,
+    };
+    diagnosis::leggi(&mut l.elm, &ctx)
+}
+
+/// Come si è conclusa la sequenza di cancellazione.
+enum FineCancellazione {
+    Completata {
+        errore_file: Option<String>,
+    },
+    /// Nulla è stato inviato alla centralina.
+    NonEseguita(String),
+    /// Collegamento caduto.
+    Caduta(String),
 }
 
 /// Errori consecutivi di comunicazione oltre i quali il collegamento è dato per perso.
@@ -349,6 +399,7 @@ impl Worker {
                 }
             }
             Comando::LeggiDiagnosi => self.leggi_diagnosi(),
+            Comando::CancellaDtc(conferma) => self.cancella_dtc(conferma),
             Comando::AvviaPolling {
                 chiavi,
                 prioritarie,
@@ -659,12 +710,7 @@ impl Worker {
         l.elm.traccia = true;
         let _ = self.tx.send(Evento::Stato(StatoConn::Diagnosi));
         (self.notifica)();
-        let ctx = Contesto {
-            adattatore: &l.info.adattatore,
-            protocollo: &l.info.protocollo,
-            supportati: &l.info.supportati,
-        };
-        let esito = diagnosis::leggi(&mut l.elm, &ctx);
+        let esito = leggi_su(l);
         let registro = l.elm.prendi_registro();
         l.elm.traccia = traccia_prima;
         match esito {
@@ -688,6 +734,137 @@ impl Worker {
                 self.chiudi_link(Some(s.0), true);
             }
         }
+    }
+
+    // ---- Cancellazione dei codici guasto -------------------------------
+
+    /// Copia della diagnosi, servizio 04, rilettura. Il polling non gira
+    /// durante la chiamata: il thread è uno solo.
+    fn cancella_dtc(&mut self, conferma: ConfermaCancellazione) {
+        let Some(mut l) = self.link.take() else {
+            self.invia(Evento::Errore(ErroreUtente::CancellazioneNonEseguita(
+                "L'adattatore non è collegato: collegalo, porta il quadro su ON con il motore \
+                 spento e riprova."
+                    .into(),
+            )));
+            return;
+        };
+        self.stato(StatoConn::Cancellazione);
+        let traccia_prima = l.elm.traccia;
+        l.elm.traccia = true;
+        let fine = self.sequenza_cancellazione(&mut l, conferma);
+        l.elm.traccia = traccia_prima;
+        let registro = l.elm.prendi_registro();
+        self.link = Some(l);
+        self.invia(Evento::Registro(registro));
+        match fine {
+            FineCancellazione::Completata { errore_file } => {
+                self.stato(StatoConn::Connesso);
+                if let Some(e) = errore_file {
+                    self.errore_registrazione(e);
+                }
+            }
+            FineCancellazione::NonEseguita(motivo) => {
+                self.invia(Evento::Errore(ErroreUtente::CancellazioneNonEseguita(
+                    motivo,
+                )));
+                self.stato(StatoConn::Connesso);
+            }
+            FineCancellazione::Caduta(m) => self.chiudi_link(Some(m), true),
+        }
+    }
+
+    fn sequenza_cancellazione(
+        &self,
+        l: &mut Link,
+        conferma: ConfermaCancellazione,
+    ) -> FineCancellazione {
+        let mut errore_file: Option<String> = None;
+        let mut annota = |esito: std::io::Result<()>| {
+            if let Err(e) = esito
+                && errore_file.is_none()
+            {
+                errore_file = Some(e.to_string());
+            }
+        };
+
+        // 1. La copia deve rispecchiare ciò che sta per essere cancellato: la
+        //    diagnosi viene sempre riletta, anche se ne esiste una precedente.
+        {
+            let report = match leggi_su(l) {
+                Ok(r) => r,
+                Err(s) => return FineCancellazione::Caduta(s.0),
+            };
+            if let Some(r) = l.recorder.as_mut() {
+                annota(r.diagnosi(&report));
+            }
+            self.invia(Evento::Diagnosi(Box::new(report.clone())));
+            l.diagnosi = Some(report);
+        }
+
+        // 2. Copia su disco: senza copia non si cancella.
+        let Some(prima) = l.diagnosi.as_ref() else {
+            return FineCancellazione::NonEseguita("Diagnosi non disponibile.".into());
+        };
+        let copia = match recording::salva_copia_diagnosi(&self.cartella, prima) {
+            Ok(p) => p,
+            Err(e) => {
+                return FineCancellazione::NonEseguita(format!(
+                    "Impossibile salvare la copia della diagnosi in {}: {e}. Senza la copia \
+                     l'app non cancella i codici.",
+                    self.cartella.display()
+                ));
+            }
+        };
+
+        // 3. Servizio 04.
+        let risultato = |esito: EsitoCancellazione| RisultatoCancellazione {
+            esito,
+            demo: l.info.demo,
+            copia: copia.clone(),
+            eseguita_il: adesso_iso(),
+        };
+        let esito = match l.elm.cancella_dtc(conferma) {
+            Ok(e) => e,
+            Err(s) => {
+                self.invia(Evento::CancellazioneDtc(Box::new(risultato(
+                    EsitoCancellazione::ErroreComunicazione(format!(
+                        "collegamento interrotto durante la cancellazione, esito sconosciuto: {}",
+                        s.0
+                    )),
+                ))));
+                return FineCancellazione::Caduta(s.0);
+            }
+        };
+        let accettata = esito.accettata();
+        self.invia(Evento::CancellazioneDtc(Box::new(risultato(esito))));
+        let m = Marker {
+            t: l.t0.elapsed().as_secs_f64(),
+            ts: adesso_iso(),
+            etichetta: if accettata {
+                MARCATORE_CANCELLAZIONE
+            } else {
+                MARCATORE_CANCELLAZIONE_FALLITA
+            }
+            .to_string(),
+        };
+        if let Some(r) = l.recorder.as_mut() {
+            annota(r.marcatore(&m));
+        }
+        self.invia(Evento::Marcatore(m));
+
+        // 4. Rilettura della diagnosi, comunque sia andata.
+        self.stato(StatoConn::Diagnosi);
+        let report = match leggi_su(l) {
+            Ok(r) => r,
+            Err(s) => return FineCancellazione::Caduta(s.0),
+        };
+        if let Some(r) = l.recorder.as_mut() {
+            annota(r.diagnosi(&report));
+        }
+        self.invia(Evento::Diagnosi(Box::new(report.clone())));
+        l.diagnosi = Some(report);
+        FineCancellazione::Completata { errore_file }
     }
 
     // ---- Polling -------------------------------------------------------

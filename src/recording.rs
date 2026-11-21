@@ -154,6 +154,42 @@ impl Recorder {
     }
 }
 
+/// Prefisso del file con la copia della diagnosi salvata prima di cancellare
+/// i codici guasto.
+pub const PREFISSO_COPIA_DIAGNOSI: &str = "diagnosi_prima_cancellazione_";
+
+/// Salva in `cartella` una copia JSON della diagnosi
+/// (`diagnosi_prima_cancellazione_AAAA-MM-GG_HH-MM-SS[_DEMO].json`) e ne
+/// restituisce il percorso. Non sovrascrive mai un file esistente. Il VIN
+/// non viene scritto.
+pub fn salva_copia_diagnosi(cartella: &Path, d: &DiagnosisReport) -> std::io::Result<PathBuf> {
+    fs::create_dir_all(cartella)?;
+    let base = format!(
+        "{PREFISSO_COPIA_DIAGNOSI}{}{}",
+        chrono::Local::now().format("%Y-%m-%d_%H-%M-%S"),
+        if d.demo { "_DEMO" } else { "" }
+    );
+    let testo = serde_json::to_string_pretty(d).map_err(std::io::Error::other)?;
+    let mut n = 1;
+    loop {
+        let nome = if n == 1 {
+            format!("{base}.json")
+        } else {
+            format!("{base}_{n}.json")
+        };
+        let percorso = cartella.join(nome);
+        match File::create_new(&percorso) {
+            Ok(mut f) => {
+                f.write_all(testo.as_bytes())?;
+                f.sync_all()?;
+                return Ok(percorso);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 100 => n += 1,
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Sessione riletta da disco.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SessionData {

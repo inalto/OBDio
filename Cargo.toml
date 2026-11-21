@@ -3,7 +3,7 @@ name = "obdio"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.93"
-description = "Lettore diagnostico OBD-II/EOBD in sola lettura per adattatori ELM327 (Carista) su Windows"
+description = "Lettore diagnostico OBD-II/EOBD per adattatori ELM327 (Carista) su Windows; in lettura, salvo la cancellazione confermata dei codici guasto"
 publish = false
 
 [dependencies]

@@ -4,6 +4,10 @@
 //! prompt) spezzato in frammenti da 20 byte: i dati attraversano quindi lo
 //! stesso identico percorso di decodifica di un adattatore reale.
 //! Tutti i segnali, sonde lambda comprese, sono SINTETICI.
+//!
+//! Il servizio 04 (cancellazione) è simulato come da norma: spariscono i
+//! codici confermati e in sospeso, il fermo immagine e la prontezza; il P0420
+//! resta fra i codici permanenti (0A).
 
 use std::collections::VecDeque;
 use std::f64::consts::TAU;
@@ -35,6 +39,10 @@ pub struct DemoTransport {
     latenza: Duration,
     interrompi: Arc<AtomicBool>,
     chiuso: bool,
+    /// Vero dopo un servizio 04: codici, fermo immagine e prontezza sono
+    /// azzerati come su una centralina reale. Resta valido per tutta la vita
+    /// del simulatore (un ATZ non riporta indietro i codici).
+    codici_cancellati: bool,
 }
 
 impl Default for DemoTransport {
@@ -63,6 +71,7 @@ impl DemoTransport {
             latenza,
             interrompi: Arc::new(AtomicBool::new(false)),
             chiuso: false,
+            codici_cancellati: false,
         }
     }
 
@@ -186,10 +195,24 @@ impl DemoTransport {
             .collect()
     }
 
-    fn dati(&self, cmd: &str) -> Option<Vec<u8>> {
+    fn dati(&mut self, cmd: &str) -> Option<Vec<u8>> {
         let byte = |i: usize| u8::from_str_radix(cmd.get(i..i + 2)?, 16).ok();
         let servizio = byte(0)?;
+        let cancellati = self.codici_cancellati;
         match (servizio, cmd.len()) {
+            // Cancellazione: risposta positiva e stato azzerato.
+            (0x04, 2) => {
+                self.codici_cancellati = true;
+                Some(vec![0x44])
+            }
+            // Dopo la cancellazione: nessun fotogramma (DTC 0000), altri PID assenti.
+            (0x02, 6) if cancellati => {
+                let pid = byte(2)?;
+                (pid == 0x02 && byte(4)? == 0).then(|| vec![0x42, 0x02, 0x00, 0x00, 0x00])
+            }
+            (0x03, 2) if cancellati => Some(vec![0x43, 0x00]),
+            (0x07, 2) if cancellati => Some(vec![0x47, 0x00]),
+            // I codici permanenti (0A) restano: il servizio 04 non li cancella.
             (0x01, 4) => {
                 let pid = byte(2)?;
                 let mut out = vec![0x41, pid];
@@ -241,6 +264,9 @@ impl DemoTransport {
         };
         let ottetto = |v: f64| vec![v.round().clamp(0.0, 255.0) as u8];
         Some(match pid {
+            // Dopo la cancellazione: MIL spenta, 0 DTC; catalizzatore, evaporativo,
+            // sonde e riscaldatori non completati.
+            0x01 if self.codici_cancellati => vec![0x00, 0x07, 0x65, 0x65],
             // MIL accesa, 1 DTC; monitor catalizzatore, sonde e riscaldatori completati.
             0x01 => vec![0x81, 0x07, 0x65, 0x00],
             0x03 => vec![0x02, 0x00],
@@ -392,5 +418,42 @@ impl Transport for DemoTransport {
 
     fn close(&mut self) {
         self.chiuso = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn invia(d: &mut DemoTransport, cmd: &str) -> String {
+        d.write(format!("{cmd}\r").as_bytes()).unwrap();
+        let mut out = String::new();
+        while !out.contains('>') {
+            out.push_str(&String::from_utf8_lossy(
+                &d.read(Duration::from_millis(50)).unwrap(),
+            ));
+        }
+        out
+    }
+
+    #[test]
+    fn cancellazione_simulata_resiste_al_riavvio() {
+        let mut d = DemoTransport::con_latenza(Duration::ZERO);
+        for c in ["ATZ", "ATE0", "ATS1", "ATH1"] {
+            invia(&mut d, c);
+        }
+        assert!(invia(&mut d, "03").contains("7E8 04 43 01 04 20"));
+        assert!(invia(&mut d, "04").contains("7E8 01 44 AA"));
+        invia(&mut d, "ATZ");
+        for c in ["ATE0", "ATS1", "ATH1"] {
+            invia(&mut d, c);
+        }
+        assert!(invia(&mut d, "03").contains("7E8 02 43 00"));
+        assert!(invia(&mut d, "07").contains("7E8 02 47 00"));
+        assert!(invia(&mut d, "0101").contains("7E8 06 41 01 00 07 65 65"));
+        assert!(invia(&mut d, "020200").contains("7E8 05 42 02 00 00 00"));
+        // I codici permanenti non si cancellano con il servizio 04.
+        assert!(invia(&mut d, "0A").contains("7E8 04 4A 01 04 20"));
+        assert!(invia(&mut d, "0621").contains("46 21"));
     }
 }

@@ -14,7 +14,9 @@ use crate::obd::pids::PresetP0420;
 use crate::recording::{self, SessionData};
 use crate::transport::ble::{BleDispositivo, GattInfo};
 use crate::transport::serial::PortaSeriale;
-use crate::worker::{self, Comando, ErroreUtente, Evento, InfoConn, StatoConn};
+use crate::worker::{
+    self, Comando, ErroreUtente, Evento, InfoConn, RisultatoCancellazione, StatoConn,
+};
 
 #[cfg(feature = "collaudo")]
 mod collaudo;
@@ -83,6 +85,11 @@ pub struct App {
     pub(crate) includi_vin: bool,
     /// Scorrimento da applicare una volta alla pagina della diagnosi.
     pub(crate) scorri_diagnosi: Option<f32>,
+    /// Finestra di conferma della cancellazione aperta; il valore è la spunta
+    /// «Ho letto e voglio cancellare i codici».
+    pub(crate) conferma_cancellazione: Option<bool>,
+    /// Esito dell'ultima cancellazione dei codici guasto.
+    pub(crate) esito_cancellazione: Option<RisultatoCancellazione>,
 
     // Dati in tempo reale
     pub(crate) live: Archivio,
@@ -110,7 +117,7 @@ pub struct App {
 pub fn esegui() -> eframe::Result {
     let opzioni = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("OBDio — Diagnostica OBD-II in sola lettura")
+            .with_title("OBDio — Diagnostica OBD-II")
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([980.0, 620.0]),
         ..Default::default()
@@ -157,6 +164,8 @@ impl App {
             diagnosi: None,
             includi_vin: false,
             scorri_diagnosi: None,
+            conferma_cancellazione: None,
+            esito_cancellazione: None,
             live: Archivio::default(),
             live_demo: false,
             preset: PresetP0420::default(),
@@ -246,12 +255,18 @@ impl App {
                     self.live = Archivio::default();
                     self.live_demo = info.demo;
                     self.diagnosi = None;
+                    self.esito_cancellazione = None;
                     self.errore = None;
                     self.gatt_sconosciuto = None;
                     self.extra = None;
                     self.info = Some(*info);
                 }
                 Evento::Diagnosi(d) => self.diagnosi = Some(*d),
+                Evento::CancellazioneDtc(r) => {
+                    self.esito_cancellazione = Some(*r);
+                    self.scheda = Scheda::Diagnosi;
+                    self.scorri_diagnosi = Some(0.0);
+                }
                 Evento::Campioni(v) => {
                     for c in &v {
                         self.live.aggiungi(c);
@@ -277,11 +292,15 @@ impl App {
                 Evento::Marcatore(m) => self.live.marcatori.push(m),
                 Evento::Scollegato { .. } => {
                     self.info = None;
+                    self.conferma_cancellazione = None;
                     self.polling = false;
                     self.registrazione = None;
                 }
                 Evento::Errore(e) => {
-                    if !matches!(e, ErroreUtente::Registrazione(_)) {
+                    if !matches!(
+                        e,
+                        ErroreUtente::Registrazione(_) | ErroreUtente::CancellazioneNonEseguita(_)
+                    ) {
                         self.scheda = Scheda::Connessione;
                     }
                     self.errore = Some(e);
@@ -323,6 +342,7 @@ impl App {
             StatoConn::Connessione(fase) => (fase.clone(), GIALLO),
             StatoConn::Connesso => ("Collegato".into(), VERDE),
             StatoConn::Diagnosi => ("Lettura della diagnosi in corso…".into(), GIALLO),
+            StatoConn::Cancellazione => ("Cancellazione dei codici guasto in corso…".into(), ROSSO),
             StatoConn::Disconnessione => ("Disconnessione in corso…".into(), GIALLO),
         }
     }
@@ -443,6 +463,9 @@ impl eframe::App for App {
             Scheda::Live => self.pagina_live(ui),
             Scheda::Sessioni => self.pagina_sessioni(ui),
         });
+        // Sopra a tutto, qualunque sia la scheda.
+        let ctx = ui.ctx().clone();
+        self.finestra_cancellazione(&ctx);
     }
 }
 

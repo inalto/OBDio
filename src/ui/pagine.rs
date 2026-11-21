@@ -7,11 +7,15 @@ use super::{
     ARANCIO_DEMO, App, GIALLO, GRIGIO, ROSSO, Scheda, VERDE, apri_cartella, etichetta_stato,
 };
 use crate::diagnosis::{DiagnosisReport, Lettura};
+use crate::elm::{ConfermaCancellazione, EsitoCancellazione, RispostaCancellazione};
 use crate::model::{Stato, num_it};
 use crate::obd::pids;
 use crate::recording;
 use crate::summary::{self, valore_con_unita};
 use crate::worker::{Comando, Sorgente, StatoConn};
+
+/// Fondo dei pulsanti delle azioni distruttive.
+const ROSSO_SCURO: Color32 = Color32::from_rgb(140, 28, 40);
 
 const EXTRA: [&str; 5] = ["giri", "velocita", "temp_refrigerante", "carico", "map"];
 const MARCATORI_RAPIDI: [&str; 3] = ["Minimo", "2.500 giri", "Velocità costante"];
@@ -405,8 +409,9 @@ impl App {
             });
         }
         ui.label(
-            "L'app lavora in sola lettura: legge dati diagnostici standard e non cancella \
-             codici, non scrive sulle centraline e non comanda attuatori.",
+            "L'app legge dati diagnostici standard. L'unica eccezione è «Cancella codici \
+             guasto», che chiede sempre una conferma esplicita. Non scrive sulle centraline, \
+             non esegue codifiche né test attuatori e non permette di inviare comandi liberi.",
         );
 
         sezione(ui, "1. Bluetooth Low Energy");
@@ -569,14 +574,39 @@ impl App {
                 ui.spinner();
                 ui.label("Lettura in corso…");
             }
+            if self.stato == StatoConn::Cancellazione {
+                ui.spinner();
+                ui.label(RichText::new("Cancellazione in corso…").color(ROSSO));
+            }
             if let Some(d) = &self.diagnosi {
                 if ui.button("Copia riepilogo").clicked() {
                     ui.ctx().copy_text(summary::riepilogo(d, self.includi_vin));
                 }
                 ui.checkbox(&mut self.includi_vin, "Includi il VIN nel riepilogo");
             }
+            // Azione distruttiva: all'estremo opposto di «Leggi diagnosi».
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let pulsante = egui::Button::new(
+                    RichText::new("Cancella codici guasto…")
+                        .color(Color32::WHITE)
+                        .strong(),
+                )
+                .fill(ROSSO_SCURO)
+                .stroke(Stroke::new(1.0, ROSSO));
+                if ui
+                    .add_enabled(self.pronto(), pulsante)
+                    .on_hover_text(
+                        "Cancella codici memorizzati e in sospeso, fermo immagine e prontezza. \
+                         Chiede conferma.",
+                    )
+                    .clicked()
+                {
+                    self.conferma_cancellazione = Some(false);
+                }
+            });
         });
         ui.separator();
+        self.disegna_esito_cancellazione(ui);
         if !self.collegato() && self.diagnosi.is_some() {
             ui.label(
                 RichText::new("Adattatore non collegato: questa è l'ultima lettura eseguita.")
@@ -606,6 +636,240 @@ impl App {
                 });
             }
         });
+    }
+
+    /// Esito dell'ultima cancellazione, in chiaro, sopra la diagnosi riletta.
+    fn disegna_esito_cancellazione(&mut self, ui: &mut egui::Ui) {
+        let Some(r) = self.esito_cancellazione.clone() else {
+            return;
+        };
+        let (titolo, colore, spiegazione) = match &r.esito {
+            EsitoCancellazione::Risposte(v) => {
+                let accettate = v
+                    .iter()
+                    .filter(|e| e.risposta == RispostaCancellazione::Accettata)
+                    .count();
+                if accettate == v.len() {
+                    (
+                        "Codici guasto cancellati",
+                        VERDE,
+                        "La diagnosi qui sotto è stata riletta dopo la cancellazione. I codici \
+                         permanenti restano finché la centralina non li elimina da sola; i \
+                         monitor di prontezza si completano nei prossimi cicli di guida."
+                            .to_string(),
+                    )
+                } else if accettate > 0 {
+                    (
+                        "Cancellazione eseguita solo da alcune centraline",
+                        GIALLO,
+                        "La diagnosi qui sotto è stata riletta dopo la cancellazione.".to_string(),
+                    )
+                } else {
+                    (
+                        "Cancellazione rifiutata dalla centralina",
+                        ROSSO,
+                        "I codici non sono stati cancellati. La diagnosi qui sotto è stata \
+                         riletta."
+                            .to_string(),
+                    )
+                }
+            }
+            EsitoCancellazione::NessunaRisposta => (
+                "La centralina non ha risposto alla cancellazione",
+                ROSSO,
+                "Probabilmente i codici non sono stati cancellati: controlla la diagnosi \
+                 riletta qui sotto e verifica che il quadro sia acceso."
+                    .to_string(),
+            ),
+            EsitoCancellazione::ErroreComunicazione(d) => (
+                "Errore durante la cancellazione",
+                ROSSO,
+                format!(
+                    "Non è possibile sapere se i codici sono stati cancellati: controlla la \
+                     diagnosi riletta. Dettaglio: {d}"
+                ),
+            ),
+        };
+        let mut chiudi = false;
+        egui::Frame::group(ui.style())
+            .stroke(Stroke::new(1.5, colore))
+            .inner_margin(egui::Margin::same(12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(titolo).heading().color(colore));
+                    if r.demo {
+                        ui.label(
+                            RichText::new(" SIMULATA — modalità demo, nessun veicolo coinvolto ")
+                                .background_color(ARANCIO_DEMO)
+                                .color(Color32::BLACK)
+                                .strong(),
+                        );
+                    }
+                });
+                if let EsitoCancellazione::Risposte(v) = &r.esito {
+                    for e in v {
+                        let c = if e.risposta == RispostaCancellazione::Accettata {
+                            VERDE
+                        } else {
+                            ROSSO
+                        };
+                        ui.label(RichText::new(format!("ECU {}: {}", e.ecu, e.testo())).color(c));
+                    }
+                }
+                ui.label(spiegazione);
+                ui.label(
+                    RichText::new(format!("Eseguita il {}", r.eseguita_il))
+                        .small()
+                        .color(GRIGIO),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Copia della diagnosi precedente:");
+                    ui.label(RichText::new(r.copia.display().to_string()).monospace());
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Apri la cartella").clicked() {
+                        apri_cartella(r.copia.parent().unwrap_or(&self.cartella));
+                    }
+                    if ui.button("Chiudi").clicked() {
+                        chiudi = true;
+                    }
+                });
+            });
+        if chiudi {
+            self.esito_cancellazione = None;
+        }
+        ui.add_space(6.0);
+    }
+
+    /// Finestra di conferma della cancellazione (docs/DESIGN.md, sezione 5).
+    pub(crate) fn finestra_cancellazione(&mut self, ctx: &egui::Context) {
+        let Some(mut spunta) = self.conferma_cancellazione else {
+            return;
+        };
+        if !self.collegato() {
+            self.conferma_cancellazione = None;
+            return;
+        }
+        let demo = self.info.as_ref().is_some_and(|i| i.demo);
+        let pronto = self.pronto();
+        let mut annulla = false;
+        let mut conferma = false;
+        let punto = |ui: &mut egui::Ui, testo: &str| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label("•");
+                ui.label(testo);
+            });
+        };
+        let risposta = egui::Modal::new(egui::Id::new("conferma_cancellazione"))
+            .backdrop_color(Color32::from_black_alpha(170))
+            .show(ctx, |ui| {
+                ui.set_max_width(580.0);
+                ui.label(
+                    RichText::new("Cancellare i codici guasto?")
+                        .heading()
+                        .color(ROSSO),
+                );
+                ui.label(
+                    RichText::new(
+                        "Questa operazione modifica lo stato della centralina e non si può \
+                         annullare.",
+                    )
+                    .strong(),
+                );
+                if demo {
+                    ui.label(
+                        RichText::new(
+                            " MODALITÀ DEMO — la cancellazione avviene sul simulatore, non su un \
+                             veicolo ",
+                        )
+                        .background_color(ARANCIO_DEMO)
+                        .color(Color32::BLACK)
+                        .strong(),
+                    );
+                }
+                ui.add_space(8.0);
+                ui.label(RichText::new("Verranno cancellati").strong());
+                punto(ui, "i codici guasto memorizzati (confermati) e in sospeso;");
+                punto(ui, "il fermo immagine;");
+                punto(ui, "i risultati dei monitor (Mode 06);");
+                punto(
+                    ui,
+                    "lo stato di prontezza: i monitor tornano «non completato»; si azzerano \
+                     anche distanza e tempo dalla cancellazione. La spia MIL si spegne.",
+                );
+                ui.add_space(4.0);
+                ui.label(RichText::new("Non verranno cancellati").strong());
+                punto(
+                    ui,
+                    "i codici permanenti: li elimina solo la centralina, dopo alcuni cicli di \
+                     guida senza che il guasto si ripresenti.",
+                );
+                ui.add_space(4.0);
+                ui.label(RichText::new("Condizioni richieste").strong());
+                punto(
+                    ui,
+                    "quadro acceso e motore spento. Con il motore acceso molte centraline \
+                     rifiutano la cancellazione.",
+                );
+                ui.add_space(4.0);
+                ui.label(RichText::new("Revisione").strong().color(GIALLO));
+                ui.label(
+                    "Finché i monitor di prontezza non tornano «completato» (servono uno o più \
+                     cicli di guida) il veicolo può non superare la revisione. Cancellare i \
+                     codici non ripara il guasto: se la causa resta, il codice ricompare.",
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    "Prima di cancellare l'app salva una copia della diagnosi attuale, fermo \
+                     immagine compreso, nella cartella delle sessioni.",
+                );
+                ui.add_space(10.0);
+                ui.checkbox(&mut spunta, "Ho letto e voglio cancellare i codici");
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    let r_annulla =
+                        ui.add(egui::Button::new("Annulla").min_size(egui::vec2(120.0, 32.0)));
+                    // Pulsante predefinito: riceve il fuoco, Invio annulla.
+                    if ui.memory(|m| m.focused().is_none()) {
+                        r_annulla.request_focus();
+                    }
+                    if r_annulla.clicked() {
+                        annulla = true;
+                    }
+                    ui.add_space(16.0);
+                    let pulsante = egui::Button::new(
+                        RichText::new("Cancella codici guasto")
+                            .color(Color32::WHITE)
+                            .strong(),
+                    )
+                    .fill(ROSSO_SCURO)
+                    .stroke(Stroke::new(1.0, ROSSO))
+                    .min_size(egui::vec2(180.0, 32.0));
+                    if ui.add_enabled(spunta && pronto, pulsante).clicked() {
+                        conferma = true;
+                    }
+                });
+                if !pronto {
+                    ui.label(
+                        RichText::new("Attendi la fine dell'operazione in corso.")
+                            .small()
+                            .color(GRIGIO),
+                    );
+                }
+            });
+        if conferma && spunta && pronto {
+            self.conferma_cancellazione = None;
+            self.errore = None;
+            self.esito_cancellazione = None;
+            self.invia(Comando::CancellaDtc(
+                ConfermaCancellazione::utente_ha_confermato(),
+            ));
+        } else if annulla || risposta.should_close() {
+            self.conferma_cancellazione = None;
+        } else {
+            self.conferma_cancellazione = Some(spunta);
+        }
     }
 
     // ------------------------------------------------------------------

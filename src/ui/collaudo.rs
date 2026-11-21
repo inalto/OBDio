@@ -10,6 +10,7 @@ use std::time::Instant;
 use eframe::egui;
 
 use super::{App, Scheda};
+use crate::elm::ConfermaCancellazione;
 use crate::worker::{Comando, Sorgente};
 
 pub struct Collaudo {
@@ -135,11 +136,32 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             c.avanti();
         }
         15 if c.secondi() > 0.5 => scatta(&mut c, "6_collegato"),
+        // Cancellazione dei codici sul simulatore: conferma, poi esito.
         16 => {
+            app.scheda = Scheda::Diagnosi;
+            app.conferma_cancellazione = Some(true);
+            c.avanti();
+        }
+        17 if c.secondi() > 0.6 => scatta(&mut c, "7_conferma_cancellazione"),
+        18 => {
+            app.conferma_cancellazione = None;
+            app.invia(Comando::CancellaDtc(
+                ConfermaCancellazione::utente_ha_confermato(),
+            ));
+            c.avanti();
+        }
+        19 if app.esito_cancellazione.is_some()
+            && app.pronto()
+            && app.diagnosi.as_ref().is_some_and(|d| !d.fermo.presente)
+            && c.secondi() > 0.8 =>
+        {
+            scatta(&mut c, "8_esito_cancellazione")
+        }
+        20 => {
             app.invia(Comando::Scollega);
             c.avanti();
         }
-        17 if !app.collegato() && c.secondi() > 0.5 => {
+        21 if !app.collegato() && c.secondi() > 0.5 => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             c.avanti();
         }

@@ -1,4 +1,5 @@
-//! OBDio — lettore diagnostico OBD-II/EOBD in sola lettura.
+//! OBDio — lettore diagnostico OBD-II/EOBD. Tutto in lettura, salvo la
+//! cancellazione confermata dei codici guasto (servizio 04).
 //!
 //! Strati, dal basso verso l'alto:
 //! - [`transport`]: canale di byte verso l'adattatore (BLE, seriale, demo);
