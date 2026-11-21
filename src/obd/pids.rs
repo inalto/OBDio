@@ -41,6 +41,110 @@ pub enum Kind {
     Millivolt,
     /// (256A + B)·100/255 %
     CaricoAssoluto,
+    /// 3·A kPa (pressione carburante, PID 0A)
+    PressioneTripla,
+    /// 10·(256A + B) kPa (pressione rail relativa, PID 23)
+    PressioneRail,
+    /// B·100/255 % (il secondo byte, per esempio farfalla assoluta B)
+    PercentoB,
+    /// (256A + B)/20 L/h
+    ConsumoOrario,
+    /// A − 125 % (coppia, PID 61 e 62)
+    Coppia,
+    /// (A·2²⁴ + B·2¹⁶ + C·2⁸ + D)/10 (contachilometri, PID A6)
+    Contatore32,
+    /// Grandezza calcolata dall'app: nessun PID, mai richiesta alla centralina.
+    Calcolato,
+}
+
+/// Raggruppamento dei parametri nella pagina Sensori.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Gruppo {
+    Motore,
+    CarburanteEMiscela,
+    SondeLambda,
+    TemperatureEPressioni,
+    DistanzeETempi,
+    Altro,
+}
+
+impl Gruppo {
+    /// Ordine di comparsa nell'elenco.
+    pub const TUTTI: [Gruppo; 6] = [
+        Gruppo::Motore,
+        Gruppo::CarburanteEMiscela,
+        Gruppo::SondeLambda,
+        Gruppo::TemperatureEPressioni,
+        Gruppo::DistanzeETempi,
+        Gruppo::Altro,
+    ];
+
+    pub fn nome(self) -> &'static str {
+        match self {
+            Gruppo::Motore => "Motore",
+            Gruppo::CarburanteEMiscela => "Carburante e miscela",
+            Gruppo::SondeLambda => "Sonde lambda",
+            Gruppo::TemperatureEPressioni => "Temperature e pressioni",
+            Gruppo::DistanzeETempi => "Distanze e tempi",
+            Gruppo::Altro => "Altro",
+        }
+    }
+}
+
+fn gruppo_di(key: &str) -> Gruppo {
+    if key.starts_with("o2s") {
+        return Gruppo::SondeLambda;
+    }
+    if key.starts_with("temp_") || key.starts_with("pressione_barometrica") || key == "map" {
+        return Gruppo::TemperatureEPressioni;
+    }
+    match key {
+        "stft_b1"
+        | "ltft_b1"
+        | "stft_b2"
+        | "ltft_b2"
+        | "livello_carburante"
+        | "pressione_carburante"
+        | "pressione_rail"
+        | "consumo_istantaneo"
+        | "lambda_comandato" => Gruppo::CarburanteEMiscela,
+        "tempo_motore"
+        | "km_con_mil"
+        | "km_da_cancellazione"
+        | "avviamenti_da_cancellazione"
+        | "minuti_con_mil"
+        | "minuti_da_cancellazione"
+        | "contachilometri"
+        | CHIAVE_DISTANZA_PARZIALE => Gruppo::DistanzeETempi,
+        "carico"
+        | "giri"
+        | "velocita"
+        | "anticipo"
+        | "maf"
+        | "farfalla"
+        | "farfalla_relativa"
+        | "farfalla_assoluta_b"
+        | "farfalla_comandata"
+        | "pedale_d"
+        | "pedale_e"
+        | "pedale_relativo"
+        | "carico_assoluto"
+        | "coppia_richiesta"
+        | "coppia_effettiva"
+        | "coppia_riferimento" => Gruppo::Motore,
+        _ => Gruppo::Altro,
+    }
+}
+
+/// Chiave della distanza percorsa dalla connessione, calcolata dall'app.
+pub const CHIAVE_DISTANZA_PARZIALE: &str = "distanza_parziale";
+
+/// Se `key` è una grandezza calcolata, la chiave del parametro da cui deriva.
+pub fn sorgente_derivato(key: &str) -> Option<&'static str> {
+    match key {
+        CHIAVE_DISTANZA_PARZIALE => Some("velocita"),
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -53,6 +157,10 @@ pub struct Param {
     pub decimali: usize,
     /// Mostrare sempre il segno (correzioni carburante).
     pub con_segno: bool,
+    pub gruppo: Gruppo,
+    /// Calcolato dall'app, non letto dalla centralina: escluso dalla
+    /// decodifica per PID e mai richiesto.
+    pub derivato: bool,
 }
 
 fn p(key: &str, pid: u8, nome: &str, unita: &'static str, kind: Kind, decimali: usize) -> Param {
@@ -64,6 +172,8 @@ fn p(key: &str, pid: u8, nome: &str, unita: &'static str, kind: Kind, decimali: 
         kind,
         decimali,
         con_segno: matches!(kind, Kind::Correzione | Kind::O2Correzione),
+        gruppo: gruppo_di(key),
+        derivato: kind == Kind::Calcolato,
     }
 }
 
@@ -203,6 +313,137 @@ fn costruisci() -> Vec<Param> {
             0,
         ),
         p("temp_olio", 0x5C, "Temperatura olio", "°C", Temperatura, 0),
+        p(
+            "pressione_carburante",
+            0x0A,
+            "Pressione carburante",
+            "kPa",
+            PressioneTripla,
+            0,
+        ),
+        p(
+            "pressione_rail",
+            0x23,
+            "Pressione rail carburante (relativa)",
+            "kPa",
+            PressioneRail,
+            0,
+        ),
+        p(
+            "avviamenti_da_cancellazione",
+            0x30,
+            "Avviamenti a caldo dalla cancellazione DTC",
+            "",
+            Byte,
+            0,
+        ),
+        p(
+            "farfalla_relativa",
+            0x45,
+            "Posizione farfalla relativa",
+            "%",
+            Percento,
+            1,
+        ),
+        p(
+            "farfalla_assoluta_b",
+            0x47,
+            "Posizione farfalla assoluta B",
+            "%",
+            PercentoB,
+            1,
+        ),
+        // Le formule dei PID 49, 4A e 4C sono dedotte da righe accorpate della
+        // tabella di Wikipedia (docs/RICERCA.md, «Non verificato»): A·100/255 %.
+        p(
+            "pedale_d",
+            0x49,
+            "Posizione pedale acceleratore D",
+            "%",
+            Percento,
+            1,
+        ),
+        p(
+            "pedale_e",
+            0x4A,
+            "Posizione pedale acceleratore E",
+            "%",
+            Percento,
+            1,
+        ),
+        p(
+            "farfalla_comandata",
+            0x4C,
+            "Farfalla comandata dalla centralina",
+            "%",
+            Percento,
+            1,
+        ),
+        p(
+            "minuti_con_mil",
+            0x4D,
+            "Tempo con MIL accesa",
+            "min",
+            Parola,
+            0,
+        ),
+        p(
+            "minuti_da_cancellazione",
+            0x4E,
+            "Tempo dalla cancellazione DTC",
+            "min",
+            Parola,
+            0,
+        ),
+        p(
+            "pedale_relativo",
+            0x5A,
+            "Posizione relativa pedale acceleratore",
+            "%",
+            Percento,
+            1,
+        ),
+        p(
+            "consumo_istantaneo",
+            0x5E,
+            "Consumo istantaneo di carburante",
+            "L/h",
+            ConsumoOrario,
+            2,
+        ),
+        p(
+            "coppia_richiesta",
+            0x61,
+            "Coppia richiesta dal conducente",
+            "%",
+            Coppia,
+            0,
+        ),
+        p("coppia_effettiva", 0x62, "Coppia effettiva", "%", Coppia, 0),
+        p(
+            "coppia_riferimento",
+            0x63,
+            "Coppia di riferimento del motore",
+            "N·m",
+            Parola,
+            0,
+        ),
+        p(
+            "contachilometri",
+            0xA6,
+            "Contachilometri",
+            "km",
+            Contatore32,
+            1,
+        ),
+        p(
+            CHIAVE_DISTANZA_PARZIALE,
+            0x00,
+            "Distanza parziale calcolata",
+            "km",
+            Calcolato,
+            3,
+        ),
     ];
     for n in 1..=8u8 {
         let s = nome_sonda(n);
@@ -265,8 +506,11 @@ pub fn catalogo() -> &'static [Param] {
     C.get_or_init(costruisci)
 }
 
+/// Parametri letti dalla centralina con questo PID (i derivati sono esclusi).
 pub fn per_pid(pid: u8) -> impl Iterator<Item = &'static Param> {
-    catalogo().iter().filter(move |x| x.pid == pid)
+    catalogo()
+        .iter()
+        .filter(move |x| x.pid == pid && !x.derivato)
 }
 
 pub fn per_key(key: &str) -> Option<&'static Param> {
@@ -312,6 +556,17 @@ pub fn decodifica(par: &Param, d: &[u8]) -> Decodifica {
         Kind::TemperaturaCat => parola(d, 0).map(|w| w / 10.0 - 40.0),
         Kind::Millivolt => parola(d, 0).map(|w| w / 1000.0),
         Kind::CaricoAssoluto => parola(d, 0).map(|w| w * 100.0 / 255.0),
+        Kind::PressioneTripla => a.map(|a| a * 3.0),
+        Kind::PressioneRail => parola(d, 0).map(|w| w * 10.0),
+        Kind::PercentoB => d.get(1).map(|b| *b as f64 * 100.0 / 255.0),
+        Kind::ConsumoOrario => parola(d, 0).map(|w| w / 20.0),
+        Kind::Coppia => a.map(|a| a - 125.0),
+        Kind::Contatore32 => match d.get(..4) {
+            Some(&[a, b, c, e]) => Some(u32::from_be_bytes([a, b, c, e]) as f64 / 10.0),
+            _ => None,
+        },
+        // Non esiste una risposta della centralina da decodificare.
+        Kind::Calcolato => None,
     };
     match r {
         Some(v) => Valore(v),
@@ -331,6 +586,65 @@ pub fn stato_carburante(d: &[u8]) -> Option<String> {
             0x08 => "Anello aperto: guasto del sistema",
             0x10 => "Anello chiuso con almeno una sonda in anomalia",
             altro => return Some(format!("Valore non standard (0x{altro:02X})")),
+        }
+        .to_string(),
+    )
+}
+
+/// PID 51: tipo di carburante.
+pub fn tipo_carburante(d: &[u8]) -> Option<String> {
+    let a = *d.first()?;
+    Some(
+        match a {
+            0 => "Non disponibile",
+            1 => "Benzina",
+            2 => "Metanolo",
+            3 => "Etanolo",
+            4 => "Diesel",
+            5 => "GPL",
+            6 => "Metano (CNG)",
+            7 => "Propano",
+            8 => "Elettrico",
+            9 => "Bifuel a benzina",
+            10 => "Bifuel a metanolo",
+            11 => "Bifuel a etanolo",
+            12 => "Bifuel a GPL",
+            13 => "Bifuel a metano (CNG)",
+            14 => "Bifuel a propano",
+            15 => "Bifuel a elettricità",
+            16 => "Bifuel a elettricità e combustione",
+            17 => "Ibrido benzina",
+            18 => "Ibrido etanolo",
+            19 => "Ibrido diesel",
+            20 => "Ibrido elettrico",
+            21 => "Ibrido elettrico e combustione",
+            22 => "Ibrido rigenerativo",
+            23 => "Bifuel a diesel",
+            altro => return Some(format!("valore {altro} non in tabella")),
+        }
+        .to_string(),
+    )
+}
+
+/// PID 1C: norma OBD a cui il veicolo dichiara di conformarsi.
+pub fn norma_obd(d: &[u8]) -> Option<String> {
+    let a = *d.first()?;
+    Some(
+        match a {
+            1 => "OBD-II (CARB)",
+            2 => "OBD (EPA)",
+            3 => "OBD e OBD-II",
+            4 => "OBD-I",
+            5 => "Non conforme OBD",
+            6 => "EOBD",
+            7 => "EOBD e OBD-II",
+            8 => "EOBD e OBD",
+            9 => "EOBD, OBD e OBD-II",
+            10 => "JOBD",
+            11 => "JOBD e OBD-II",
+            12 => "JOBD e EOBD",
+            13 => "JOBD, EOBD e OBD-II",
+            altro => return Some(format!("valore {altro}")),
         }
         .to_string(),
     )
@@ -453,6 +767,130 @@ mod tests {
         for x in catalogo() {
             assert!(viste.insert(x.key.clone()), "chiave duplicata {}", x.key);
         }
+    }
+
+    #[test]
+    fn nuove_formule_pressioni_e_conteggi() {
+        // 0A: 3·A kPa.
+        assert_eq!(val("pressione_carburante", &[0x64]), 300.0);
+        // 23: 10·(256A + B) kPa.
+        assert_eq!(val("pressione_rail", &[0x01, 0x2C]), 3000.0);
+        // 30: A, conteggio.
+        assert_eq!(val("avviamenti_da_cancellazione", &[0x2A]), 42.0);
+        // 4D e 4E: 256A + B minuti.
+        assert_eq!(val("minuti_con_mil", &[0x01, 0x02]), 258.0);
+        assert_eq!(val("minuti_da_cancellazione", &[0x00, 0x3C]), 60.0);
+        assert_eq!(
+            decodifica(per_key("pressione_rail").unwrap(), &[0x01]),
+            Decodifica::Corta
+        );
+    }
+
+    #[test]
+    fn nuove_formule_farfalla_e_pedale() {
+        assert!((val("farfalla_relativa", &[0xFF]) - 100.0).abs() < 1e-9);
+        assert!((val("farfalla_relativa", &[0x33]) - 20.0).abs() < 1e-9);
+        // 47: usa il secondo byte.
+        assert!((val("farfalla_assoluta_b", &[0xFF, 0x80]) - 50.196078).abs() < 1e-5);
+        assert_eq!(
+            decodifica(per_key("farfalla_assoluta_b").unwrap(), &[0x80]),
+            Decodifica::Corta
+        );
+        for k in [
+            "pedale_d",
+            "pedale_e",
+            "farfalla_comandata",
+            "pedale_relativo",
+        ] {
+            assert!((val(k, &[0x66]) - 40.0).abs() < 1e-9, "{k}");
+        }
+    }
+
+    #[test]
+    fn nuove_formule_consumo_coppia_contachilometri() {
+        // 5E: (256A + B)/20 L/h.
+        assert!((val("consumo_istantaneo", &[0x00, 0x32]) - 2.5).abs() < 1e-9);
+        // 61 e 62: A − 125 %.
+        assert_eq!(val("coppia_richiesta", &[0x7D]), 0.0);
+        assert_eq!(val("coppia_effettiva", &[0xFA]), 125.0);
+        assert_eq!(val("coppia_effettiva", &[0x00]), -125.0);
+        // 63: 256A + B N·m.
+        assert_eq!(val("coppia_riferimento", &[0x01, 0xF4]), 500.0);
+        // A6: (A·2^24 + B·2^16 + C·2^8 + D)/10 km.
+        assert!((val("contachilometri", &[0x00, 0x01, 0x86, 0xA3]) - 10_000.3).abs() < 1e-6);
+        assert!((val("contachilometri", &[0x01, 0x00, 0x00, 0x00]) - 1_677_721.6).abs() < 1e-6);
+        assert_eq!(
+            decodifica(per_key("contachilometri").unwrap(), &[0x00, 0x01, 0x86]),
+            Decodifica::Corta
+        );
+    }
+
+    #[test]
+    fn derivati_esclusi_dalla_decodifica_per_pid() {
+        let d = per_key(CHIAVE_DISTANZA_PARZIALE).unwrap();
+        assert!(d.derivato);
+        assert_eq!(d.unita, "km");
+        assert_eq!(d.decimali, 3);
+        assert_eq!(
+            sorgente_derivato(CHIAVE_DISTANZA_PARZIALE),
+            Some("velocita")
+        );
+        // Il PID 00 non produce parametri e nessun altro parametro è derivato.
+        assert_eq!(per_pid(0x00).count(), 0);
+        assert_eq!(catalogo().iter().filter(|x| x.derivato).count(), 1);
+        assert!(per_key("velocita").is_some_and(|x| !x.derivato));
+    }
+
+    #[test]
+    fn ogni_parametro_ha_un_gruppo_coerente() {
+        assert_eq!(
+            per_key("o2s2_tensione").unwrap().gruppo,
+            Gruppo::SondeLambda
+        );
+        assert_eq!(per_key("giri").unwrap().gruppo, Gruppo::Motore);
+        assert_eq!(
+            per_key("stft_b1").unwrap().gruppo,
+            Gruppo::CarburanteEMiscela
+        );
+        assert_eq!(
+            per_key("temp_refrigerante").unwrap().gruppo,
+            Gruppo::TemperatureEPressioni
+        );
+        assert_eq!(
+            per_key("map").unwrap().gruppo,
+            Gruppo::TemperatureEPressioni
+        );
+        assert_eq!(
+            per_key("contachilometri").unwrap().gruppo,
+            Gruppo::DistanzeETempi
+        );
+        assert_eq!(
+            per_key(CHIAVE_DISTANZA_PARZIALE).unwrap().gruppo,
+            Gruppo::DistanzeETempi
+        );
+        assert_eq!(per_key("tensione_modulo").unwrap().gruppo, Gruppo::Altro);
+    }
+
+    #[test]
+    fn tipo_carburante_e_norma_obd() {
+        assert_eq!(tipo_carburante(&[0x01]).unwrap(), "Benzina");
+        assert_eq!(tipo_carburante(&[0x04]).unwrap(), "Diesel");
+        assert_eq!(tipo_carburante(&[0x06]).unwrap(), "Metano (CNG)");
+        assert_eq!(
+            tipo_carburante(&[0x15]).unwrap(),
+            "Ibrido elettrico e combustione"
+        );
+        assert_eq!(tipo_carburante(&[0x17]).unwrap(), "Bifuel a diesel");
+        assert_eq!(
+            tipo_carburante(&[0x63]).unwrap(),
+            "valore 99 non in tabella"
+        );
+        assert_eq!(tipo_carburante(&[]), None);
+        assert_eq!(norma_obd(&[0x06]).unwrap(), "EOBD");
+        assert_eq!(norma_obd(&[0x01]).unwrap(), "OBD-II (CARB)");
+        assert_eq!(norma_obd(&[0x0D]).unwrap(), "JOBD, EOBD e OBD-II");
+        assert_eq!(norma_obd(&[0x63]).unwrap(), "valore 99");
+        assert_eq!(norma_obd(&[]), None);
     }
 
     #[test]

@@ -23,8 +23,10 @@ mod collaudo;
 pub mod dati;
 mod grafici;
 mod pagine;
+mod sensori;
 
 use dati::Archivio;
+pub(crate) use sensori::VistaSensori;
 
 pub(crate) const ARANCIO_DEMO: Color32 = Color32::from_rgb(255, 152, 0);
 pub(crate) const ROSSO: Color32 = Color32::from_rgb(239, 83, 80);
@@ -36,7 +38,7 @@ pub(crate) const GRIGIO: Color32 = Color32::from_rgb(158, 158, 158);
 pub(crate) enum Scheda {
     Connessione,
     Diagnosi,
-    Live,
+    Sensori,
     Sessioni,
 }
 
@@ -91,11 +93,17 @@ pub struct App {
     /// Esito dell'ultima cancellazione dei codici guasto.
     pub(crate) esito_cancellazione: Option<RisultatoCancellazione>,
 
-    // Dati in tempo reale
+    // Sensori
     pub(crate) live: Archivio,
     pub(crate) live_demo: bool,
     pub(crate) preset: PresetP0420,
+    /// Unica fonte di verità dei parametri da leggere (chiave → attivo).
     pub(crate) selezione: BTreeMap<String, bool>,
+    /// Testo del campo di ricerca nell'elenco dei sensori.
+    pub(crate) ricerca: String,
+    pub(crate) vista: VistaSensori,
+    /// Scorrimento da applicare una volta alla griglia dei grafici per sensore.
+    pub(crate) scorri_sensori: Option<f32>,
     pub(crate) polling: bool,
     pub(crate) registrazione: Option<Registrazione>,
     pub(crate) ultima: Option<UltimaSessione>,
@@ -170,6 +178,9 @@ impl App {
             live_demo: false,
             preset: PresetP0420::default(),
             selezione: BTreeMap::new(),
+            ricerca: String::new(),
+            vista: VistaSensori::Confronto,
+            scorri_sensori: None,
             polling: false,
             registrazione: None,
             ultima: None,
@@ -197,16 +208,10 @@ impl App {
         self.collegato() && self.stato == StatoConn::Connesso
     }
 
-    /// Chiavi da interrogare secondo la selezione corrente.
+    /// Chiavi da interrogare secondo la selezione corrente e, fra queste,
+    /// quelle prioritarie (le sonde del preset, se selezionate).
     pub(crate) fn chiavi_polling(&self) -> (Vec<String>, Vec<String>) {
-        let sonde = self.preset.sonde();
-        let mut chiavi = sonde.clone();
-        for (k, supportato) in self.preset.base.iter().chain(self.preset.opzionali.iter()) {
-            if *supportato && self.selezione.get(k).copied().unwrap_or(false) {
-                chiavi.push(k.clone());
-            }
-        }
-        (chiavi, sonde)
+        sensori::chiavi_da_selezione(&self.selezione, &self.preset)
     }
 
     pub(crate) fn avvia_polling(&self) {
@@ -245,13 +250,7 @@ impl App {
                 Evento::GattSconosciuto(g) => self.gatt_sconosciuto = Some(g),
                 Evento::Connesso(info) => {
                     self.preset = PresetP0420::calcola(&info.unione);
-                    self.selezione.clear();
-                    for (k, ok) in &self.preset.base {
-                        self.selezione.insert(k.clone(), *ok);
-                    }
-                    for (k, _) in &self.preset.opzionali {
-                        self.selezione.insert(k.clone(), false);
-                    }
+                    self.selezione = sensori::selezione_p0420(&self.preset);
                     self.live = Archivio::default();
                     self.live_demo = info.demo;
                     self.diagnosi = None;
@@ -355,7 +354,7 @@ impl App {
             for (scheda, nome) in [
                 (Scheda::Connessione, "Connessione"),
                 (Scheda::Diagnosi, "Codici guasto e fermo immagine"),
-                (Scheda::Live, "Dati in tempo reale"),
+                (Scheda::Sensori, "Sensori"),
                 (Scheda::Sessioni, "Sessioni salvate"),
             ] {
                 ui.selectable_value(&mut self.scheda, scheda, nome);
@@ -386,7 +385,7 @@ impl App {
                 .aperta
                 .as_ref()
                 .is_some_and(|s| s.dati.intestazione.demo),
-            Scheda::Live => {
+            Scheda::Sensori => {
                 self.info.as_ref().is_some_and(|i| i.demo)
                     || (self.live_demo && !self.live.serie.is_empty())
             }
@@ -430,15 +429,19 @@ impl App {
     }
 }
 
-/// Etichetta colorata per lo stato di una lettura.
-pub(crate) fn etichetta_stato(ui: &mut egui::Ui, stato: Stato) {
-    let colore = match stato {
+/// Colore associato allo stato di una lettura.
+pub(crate) fn colore_stato(stato: Stato) -> Color32 {
+    match stato {
         Stato::Ok => VERDE,
         Stato::NonSupportato => GRIGIO,
         Stato::RispostaMancante => GIALLO,
         Stato::ErroreComunicazione => ROSSO,
-    };
-    ui.label(RichText::new(stato.etichetta()).color(colore));
+    }
+}
+
+/// Etichetta colorata per lo stato di una lettura.
+pub(crate) fn etichetta_stato(ui: &mut egui::Ui, stato: Stato) {
+    ui.label(RichText::new(stato.etichetta()).color(colore_stato(stato)));
 }
 
 pub(crate) fn apri_cartella(percorso: &std::path::Path) {
@@ -460,7 +463,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ui, |ui| match self.scheda {
             Scheda::Connessione => self.pagina_connessione(ui),
             Scheda::Diagnosi => self.pagina_diagnosi(ui),
-            Scheda::Live => self.pagina_live(ui),
+            Scheda::Sensori => self.pagina_sensori(ui),
             Scheda::Sessioni => self.pagina_sessioni(ui),
         });
         // Sopra a tutto, qualunque sia la scheda.

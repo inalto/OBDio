@@ -35,8 +35,8 @@ avviso («Ulteriori informazioni» → «Esegui comunque»).
 2. Scheda **Codici guasto e fermo immagine** → **Leggi diagnosi**: compare
    P0420 con il fermo immagine a 69 km/h, 2.128 giri/min, 83 °C, STFT +0,78 %,
    LTFT +8,59 %.
-3. Scheda **Dati in tempo reale** → **Avvia lettura**, poi **Avvia
-   registrazione**.
+3. Scheda **Sensori** → **Avvia lettura**, poi **Avvia registrazione**.
+   Prova anche **Un grafico per sensore**, **Tutti** e il campo di ricerca.
 
 In demo una fascia arancione **MODALITÀ DEMO** resta sempre visibile e ogni
 curva porta la dicitura «(sintetico)». Tutti i valori sono generati da un
@@ -88,6 +88,56 @@ Il **Registro degli scambi con l'adattatore**, in fondo alla scheda
 Connessione, mostra comandi e risposte ed è copiabile. La risposta al VIN non
 viene mai registrata.
 
+## Pagina Sensori
+
+La scheda **Sensori** elenca **tutti** i parametri del catalogo che la
+centralina dichiara di supportare, raggruppati in Motore, Carburante e
+miscela, Sonde lambda, Temperature e pressioni, Distanze e tempi, Altro.
+
+- **Ricerca** per nome, e selezioni rapide: **Diagnosi P0420** (sonde, STFT,
+  LTFT, giri, velocità, temperatura), **Tutti**, **Nessuno**.
+- La **spunta** accanto a un sensore lo mette nella lettura; se la lettura è
+  già attiva, cambiare la selezione la aggiorna subito. Per ogni sensore
+  spuntato l'elenco mostra il valore con l'unità (o lo stato della lettura, per
+  esempio «Risposta mancante», mai zero) e la frequenza effettiva in Hz.
+- A destra due viste. **Confronto**: i grafici impilati delle sonde, delle
+  correzioni carburante e di un parametro aggiuntivo, con asse del tempo
+  condiviso. **Un grafico per sensore**: una scheda per ogni sensore spuntato,
+  con valore grande, **minimo, medio e massimo** dall'inizio della
+  connessione, Hz e un piccolo grafico con le stesse fasce rosse (dato
+  mancante), gli stessi marcatori e la stessa finestra temporale; le schede si
+  dispongono in colonne secondo la larghezza della finestra.
+  **Azzera min/max** riparte da zero con le statistiche.
+- Senza collegamento l'elenco mostra i parametri presenti nei dati già letti.
+- Sotto l'elenco restano **Avvia lettura**, la registrazione, i marcatori e
+  l'ultima sessione salvata.
+
+I grafici servono a confrontare i segnali: l'app non deduce se catalizzatore o
+sonde siano guasti.
+
+### Parametri aggiunti
+
+Contachilometri (PID A6), distanza e tempo dalla cancellazione dei codici
+(31, 4E), avviamenti a caldo dalla cancellazione (30), tempo con MIL accesa
+(4D), pressione carburante (0A) e del rail (23), posizione della farfalla (45,
+47, 4C), del pedale dell'acceleratore (49, 4A, 5A), coppia richiesta, effettiva
+e di riferimento (61–63) e consumo istantaneo (5E). Tipo di carburante (51) e
+norma OBD (1C) sono testi: si leggono una volta con la diagnosi e compaiono
+nella pagina dei codici guasto e nel riepilogo. Le formule vengono da
+Wikipedia, «OBD-II PIDs»; quelle dei PID 49, 4A e 4C sono dedotte da righe
+accorpate della tabella e non verificate.
+
+### Distanza parziale
+
+Il **contachilometri** (PID A6) è obbligatorio solo dal modello 2019: molte
+auto non rispondono. Per questo l'app calcola la **distanza parziale**: integra
+la velocità della centralina principale nel tempo (regola del trapezio) a
+partire dalla connessione. Se fra due letture della velocità passano più di 5
+secondi, quel tratto non viene conteggiato, e una lettura mancante non aggiunge
+nulla. È una stima, più precisa con una lettura frequente della velocità;
+selezionarla fa leggere la velocità in automatico. Il valore viene registrato
+come ogni altro sensore (chiave `distanza_parziale`, in km).
+
 ## Acquisire una sessione P0420
 
 1. Collega l'adattatore; in **Connessione** controlla protocollo e centralina
@@ -95,12 +145,12 @@ viene mai registrata.
    `7E8`).
 2. **Codici guasto e fermo immagine** → **Leggi diagnosi**. Se la leggi prima
    di registrare, la diagnosi viene salvata dentro la sessione.
-3. **Dati in tempo reale**: il riquadro *Diagnosi P0420* mostra i segnali che
+3. **Sensori**: la selezione rapida **Diagnosi P0420** attiva i segnali che
    la centralina espone davvero:
    - sonda a monte (B1S1): lambda se disponibile, altrimenti tensione;
    - sonda a valle (B1S2): tensione, o l'altro segnale esposto;
    - STFT e LTFT bancata 1, giri, velocità, temperatura refrigerante;
-   - carico e pressione collettore, da spuntare se servono.
+   - carico e pressione collettore si aggiungono spuntandoli nell'elenco.
 
    Un parametro non dichiarato dalla centralina appare come «non supportato».
 4. **Avvia registrazione** (avvia anche la lettura). A motore caldo conviene
@@ -138,7 +188,7 @@ con lo stesso nome (data e ora; le sessioni demo hanno il suffisso `_DEMO`):
 - `AAAA-MM-GG_HH-MM-SS.obdio.jsonl` — la sessione, riapribile in OBDio;
 - `AAAA-MM-GG_HH-MM-SS.csv` — l'esportazione.
 
-**Apri la cartella** (in *Dati in tempo reale* dopo una registrazione, oppure
+**Apri la cartella** (in *Sensori* dopo una registrazione, oppure
 in *Sessioni salvate*) la mostra in Esplora file. Nella scheda **Sessioni
 salvate** scegli una sessione per rivedere grafici e diagnosi senza collegare
 il veicolo; **Esporta CSV** riscrive il CSV.
@@ -253,12 +303,14 @@ non è verificabile: è un'ipotesi, non un dato.
 
 | Verifica | Esito |
 |---|---|
-| Test automatici (77): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
+| Test automatici (95): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
 | Flusso demo attraverso il thread di lavoro reale: collegamento, P0420, fermo immagine, polling con priorità alle sonde, registrazione, CSV, riapertura | Superato |
+| Distanza parziale attraverso il thread di lavoro reale: campioni monotoni in km, registrati nella sessione e nel CSV | Superato |
 | Cancellazione dei codici in demo attraverso il thread di lavoro reale: copia della diagnosi, servizio 04, rilettura con P0420 solo permanente, MIL spenta, prontezza azzerata | Superato |
 | Finestra di conferma ed esito della cancellazione nell'interfaccia, in demo | Schermate dal collaudo automatico; clic, Esc e Invio a mano **non provati** |
 | Cancellazione dei codici su un veicolo reale | **Non provata** |
-| Interfaccia in demo, con schermate: connessione, diagnosi, fermo immagine, grafici con buco del dato e marcatori, sessione riaperta | Superato |
+| Interfaccia in demo, con schermate: connessione, diagnosi, fermo immagine, grafici con buco del dato e marcatori, pagina Sensori (confronto e un grafico per sensore con dieci sensori), sessione riaperta | Superato |
+| Nuovi PID (contachilometri, pedale, coppia, consumo, pressioni…) su un veicolo reale | **Non provati**: formule da Wikipedia, verificate solo con test sui valori; quelle dei PID 49, 4A e 4C sono dedotte |
 | Scansione BLE reale su un PC Windows 11 | Funziona (dispositivi elencati); nessun Carista presente |
 | Connessione BLE a un adattatore reale | **Non provata** |
 | Connessione seriale/SPP a un adattatore reale | **Non provata** |

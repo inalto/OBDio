@@ -64,10 +64,16 @@ presente, con `valore` vuoto e lo stato che spiega il motivo.
 | `temp_refrigerante` | 05 | °C | Temperatura refrigerante |
 | `carico` | 04 | % | Carico motore calcolato |
 | `map` | 0B | kPa | Pressione collettore |
+| `distanza_parziale` | — | km | Distanza percorsa dalla connessione, **calcolata dall'app** integrando la velocità (nessun PID: non è letta dalla centralina) |
+| `contachilometri` | A6 | km | Contachilometri, solo sui veicoli che rispondono (obbligatorio dal modello 2019) |
 
 Un PID che contiene più grandezze produce più righe con lo stesso `timestamp`
 (per esempio `o2s1_lambda` e `o2s1_tensione_wr`). L'elenco completo delle
 chiavi è in `src/obd/pids.rs`.
+
+`distanza_parziale` riparte da zero a ogni connessione; il suo `ecu` è quello
+della velocità da cui deriva. Il tratto fra due letture della velocità
+distanti più di 5 secondi non è conteggiato.
 
 Le sonde vengono interrogate più spesso degli altri parametri, quindi le
 righe non sono a passo costante: usa `timestamp` o `tempo_s` di ogni riga.

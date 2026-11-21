@@ -133,6 +133,12 @@ pub struct DiagnosisReport {
     pub mode06: SezioneMode06,
     /// PID del servizio 01 dichiarati da ogni centralina.
     pub pid_supportati: BTreeMap<String, Vec<u8>>,
+    /// Tipo di carburante dichiarato (PID 51), se la centralina lo espone.
+    #[serde(default)]
+    pub tipo_carburante: Option<String>,
+    /// Norma OBD dichiarata (PID 1C), se la centralina la espone.
+    #[serde(default)]
+    pub norma_obd: Option<String>,
     /// Mai scritto nei file: resta solo in memoria.
     #[serde(skip)]
     pub vin: Option<String>,
@@ -234,11 +240,39 @@ pub fn leggi(elm: &mut Elm, ctx: &Contesto<'_>) -> Result<DiagnosisReport, Scoll
     r.fermo = leggi_fermo(elm)?;
     r.mode06 = leggi_mode06(elm, can)?;
 
+    // Tipo di carburante e norma OBD: letti una volta, solo se dichiarati.
+    let dichiarato = |pid: u8| ctx.supportati.values().any(|s| s.contains(&pid));
+    if dichiarato(PID_TIPO_CARBURANTE) {
+        r.tipo_carburante = leggi_testo(elm, PID_TIPO_CARBURANTE, pids::tipo_carburante)?;
+    }
+    if dichiarato(PID_NORMA_OBD) {
+        r.norma_obd = leggi_testo(elm, PID_NORMA_OBD, pids::norma_obd)?;
+    }
+
     // VIN: solo su CAN, dove la risposta è un unico messaggio ricomposto.
     if can && let Esito::Dati(msg) = elm.interroga(ObdRequest::Vin)? {
         r.vin = msg.first().and_then(|m| vin_da_messaggio(&m.data));
     }
     Ok(r)
+}
+
+const PID_TIPO_CARBURANTE: u8 = 0x51;
+const PID_NORMA_OBD: u8 = 0x1C;
+
+/// Legge un PID del servizio 01 che produce un testo. Nessuna risposta valida
+/// dà `None`: il dato resta assente, mai un valore inventato.
+fn leggi_testo(
+    elm: &mut Elm,
+    pid: u8,
+    decodifica: fn(&[u8]) -> Option<String>,
+) -> Result<Option<String>, Scollegato> {
+    Ok(match elm.interroga(ObdRequest::CurrentData(pid))? {
+        Esito::Dati(msg) => msg
+            .first()
+            .and_then(|m| m.data.get(2..))
+            .and_then(decodifica),
+        _ => None,
+    })
 }
 
 fn vin_da_messaggio(data: &[u8]) -> Option<String> {
@@ -544,6 +578,39 @@ mod tests {
         assert_eq!(r.mode06.test[0].grezzo_valore, 0x1234);
         // Scala 0x7E non in tabella: solo dato grezzo.
         assert!(r.mode06.test[0].scalato.is_none());
+    }
+
+    #[test]
+    fn tipo_carburante_e_norma_obd_letti_solo_se_dichiarati() {
+        // 0100 dichiara 1C e 20; 0120 dichiara 40; 0140 dichiara 51.
+        let mut c = Copione::con_inizializzazione(20);
+        c.testo("0120", "7E8 06 41 20 00 00 00 01\r\r>");
+        c.testo("0140", "7E8 06 41 40 00 00 80 00\r\r>");
+        c.testo("011C", "7E8 03 41 1C 06\r\r>");
+        c.testo("0151", "7E8 03 41 51 04\r\r>");
+        let r = leggi_con(c);
+        assert_eq!(r.norma_obd.as_deref(), Some("EOBD"));
+        assert_eq!(r.tipo_carburante.as_deref(), Some("Diesel"));
+
+        // Senza risposta: assenti, non un valore di ripiego.
+        let r = leggi_con(Copione::con_inizializzazione(20));
+        assert_eq!(r.norma_obd, None);
+        assert_eq!(r.tipo_carburante, None);
+    }
+
+    #[test]
+    fn vecchia_sessione_senza_i_nuovi_campi_si_legge() {
+        let r = DiagnosisReport {
+            tipo_carburante: Some("Benzina".into()),
+            ..Default::default()
+        };
+        let mut json: serde_json::Value = serde_json::to_value(&r).unwrap();
+        let o = json.as_object_mut().unwrap();
+        o.remove("tipo_carburante");
+        o.remove("norma_obd");
+        let letto: DiagnosisReport = serde_json::from_value(json).unwrap();
+        assert_eq!(letto.tipo_carburante, None);
+        assert_eq!(letto.norma_obd, None);
     }
 
     #[test]

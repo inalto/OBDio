@@ -217,7 +217,8 @@ pub struct Piano {
 
 impl Piano {
     pub fn new(chiavi: &[String], prioritarie: &[String], supportati: &BTreeSet<u8>) -> Self {
-        let pid_di = |k: &String| pids::per_key(k).map(|p| p.pid);
+        // I parametri calcolati dall'app non hanno un PID da richiedere.
+        let pid_di = |k: &String| pids::per_key(k).filter(|p| !p.derivato).map(|p| p.pid);
         let mut veloci: Vec<u8> = Vec::new();
         for pid in prioritarie.iter().filter_map(pid_di) {
             if supportati.contains(&pid) && !veloci.contains(&pid) {
@@ -261,6 +262,40 @@ impl Piano {
     }
 }
 
+/// Oltre questo intervallo fra due velocità valide non si integra: la distanza
+/// percorsa nel buco è sconosciuta e non viene stimata.
+const BUCO_MAX_DISTANZA_S: f64 = 5.0;
+
+/// Distanza percorsa dalla connessione, integrando la velocità nel tempo
+/// (regola del trapezio). Un dato mancante non aggiunge nulla.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct IntegratoreDistanza {
+    /// Tempo (s) e velocità (km/h) dell'ultima velocità valida.
+    ultima: Option<(f64, f64)>,
+    km: f64,
+}
+
+impl IntegratoreDistanza {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registra la velocità letta al tempo `t`; `None` se la lettura è fallita.
+    /// Restituisce la distanza totale (km) solo se il campione è valido.
+    pub fn campione(&mut self, t: f64, kmh: Option<f64>) -> Option<f64> {
+        let v = kmh?;
+        if let Some((t0, v0)) = self.ultima {
+            let dt = t - t0;
+            // Intervalli nulli, negativi o troppo lunghi non si integrano.
+            if dt > 0.0 && dt <= BUCO_MAX_DISTANZA_S {
+                self.km += (v0 + v) / 2.0 * dt / 3600.0;
+            }
+        }
+        self.ultima = Some((t, v));
+        Some(self.km)
+    }
+}
+
 struct Link {
     elm: Elm,
     info: InfoConn,
@@ -270,6 +305,8 @@ struct Link {
     recorder: Option<Recorder>,
     diagnosi: Option<DiagnosisReport>,
     errori_di_fila: u32,
+    /// Riparte da zero a ogni connessione.
+    distanza: IntegratoreDistanza,
 }
 
 /// Esegue la lettura diagnostica completa sul collegamento.
@@ -675,6 +712,7 @@ impl Worker {
             recorder: None,
             diagnosi: None,
             errori_di_fila: 0,
+            distanza: IntegratoreDistanza::new(),
         });
         self.stato(StatoConn::Connesso);
     }
@@ -929,6 +967,29 @@ impl Worker {
                 }
             }
         }
+        // Distanza parziale: dalla velocità della centralina principale, nello
+        // stesso gruppo di campioni così viene registrata come ogni altro dato.
+        let principale = l.info.ecu.first().cloned().unwrap_or_default();
+        let derivati: Vec<Sample> = campioni
+            .iter()
+            .filter(|c| c.key == "velocita" && c.ecu == principale)
+            .filter_map(|c| {
+                let km = l
+                    .distanza
+                    .campione(c.t, c.valore.filter(|_| c.stato == Stato::Ok))?;
+                Some(Sample {
+                    t: c.t,
+                    ts: c.ts.clone(),
+                    ecu: c.ecu.clone(),
+                    key: pids::CHIAVE_DISTANZA_PARZIALE.to_string(),
+                    pid: 0x00,
+                    valore: Some(km),
+                    unita: "km".to_string(),
+                    stato: Stato::Ok,
+                })
+            })
+            .collect();
+        campioni.extend(derivati);
         let mut errore_file = None;
         if let Some(r) = l.recorder.as_mut() {
             for c in &campioni {
@@ -1042,6 +1103,65 @@ mod tests {
             sequenza,
             vec![0x24, 0x15, 0x06, 0x24, 0x15, 0x07, 0x24, 0x15, 0x0C]
         );
+    }
+
+    #[test]
+    fn distanza_a_velocita_costante() {
+        let mut d = IntegratoreDistanza::new();
+        let mut km = None;
+        // 72 km/h per 10 s, un campione ogni 0,5 s: 20 m al secondo, 200 m.
+        for i in 0..=20 {
+            km = d.campione(i as f64 * 0.5, Some(72.0));
+        }
+        assert!((km.unwrap() - 0.2).abs() < 1e-9, "{km:?}");
+    }
+
+    #[test]
+    fn distanza_trapezio_su_rampa() {
+        let mut d = IntegratoreDistanza::new();
+        assert_eq!(d.campione(0.0, Some(0.0)), Some(0.0));
+        // Da 0 a 36 km/h in 2 s: media 18 km/h, 10 m.
+        let km = d.campione(2.0, Some(36.0)).unwrap();
+        assert!((km - 0.010).abs() < 1e-9);
+    }
+
+    #[test]
+    fn distanza_non_attraversa_i_buchi() {
+        let mut d = IntegratoreDistanza::new();
+        d.campione(0.0, Some(72.0));
+        let prima = d.campione(1.0, Some(72.0)).unwrap();
+        // Silenzio di 30 s: nessuna distanza aggiunta.
+        let dopo = d.campione(31.0, Some(72.0)).unwrap();
+        assert_eq!(prima, dopo);
+        // Ripresa regolare dopo il buco.
+        let dopo2 = d.campione(32.0, Some(72.0)).unwrap();
+        assert!((dopo2 - prima - 0.02).abs() < 1e-9);
+    }
+
+    #[test]
+    fn distanza_ignora_i_campioni_mancanti() {
+        let mut d = IntegratoreDistanza::new();
+        // Senza alcuna velocità valida non c'è un valore, nemmeno zero.
+        assert_eq!(d.campione(0.0, None), None);
+        d.campione(1.0, Some(36.0));
+        assert_eq!(d.campione(2.0, None), None);
+        // Un campione mancante nel mezzo non aggiunge nulla; il successivo
+        // integra dall'ultimo valido (1 s → 3 s, 2 s ≤ 5 s).
+        let km = d.campione(3.0, Some(36.0)).unwrap();
+        assert!((km - 0.020).abs() < 1e-9);
+    }
+
+    #[test]
+    fn piano_ignora_i_parametri_calcolati() {
+        let supportati: BTreeSet<u8> = [0x0D].into_iter().collect();
+        let chiavi = vec![
+            pids::CHIAVE_DISTANZA_PARZIALE.to_string(),
+            "velocita".to_string(),
+        ];
+        let mut p = Piano::new(&chiavi, &[], &supportati);
+        assert_eq!(p.prossimo(), Some(0x0D));
+        assert_eq!(p.prossimo(), Some(0x0D));
+        assert!(Piano::new(&chiavi[..1], &[], &BTreeSet::from([0x00])).vuoto());
     }
 
     #[test]

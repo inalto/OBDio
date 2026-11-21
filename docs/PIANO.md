@@ -30,7 +30,7 @@ superati, il collaudo automatico dell'interfaccia in demo e un commit.
 |---|---|---|---|
 | 0 | Ricerca, specifica di design, questo piano | Sonnet (ricerca) | fatto |
 | 1 | Database DTC completo; cancellazione codici con conferma e copia di sicurezza; simulatore aggiornato | Opus (cancellazione), Sonnet (database) | |
-| 2 | Catalogo PID esteso (contachilometri, pedale, coppia, consumo…); pagina **Sensori** con tutti i parametri supportati, ricerca, min/medio/max, un grafico per sensore; grandezze calcolate (distanza parziale) | Sonnet | |
+| 2 | Catalogo PID esteso (contachilometri, pedale, coppia, consumo…); pagina **Sensori** con tutti i parametri supportati, ricerca, min/medio/max, un grafico per sensore; grandezze calcolate (distanza parziale) | Sonnet | fatto |
 | 3 | **Cruscotto** personalizzabile: tema e token, sette tipi di strumento, griglia, modo modifica, ispettore, pagine, modelli pronti, salvataggio, import/export dei cruscotti | Opus | |
 | 4 | Importazione ed esportazione dei dati (sessione, CSV OBDio, CSV in formato Torque, diagnosi JSON) e **riproduzione** in tempo reale con pausa, posizione e velocità | Opus | |
 | 5 | Pubblicazione **MQTT** in tempo reale: impostazioni, stato in linea/non in linea, un argomento per sensore più uno JSON cumulativo, discovery per Home Assistant | Sonnet | |

@@ -18,16 +18,21 @@ fn nota_lettura(l: &Lettura) -> String {
     }
 }
 
-/// Formatta un valore con l'unità secondo il parametro.
-pub fn valore_con_unita(key: &str, valore: f64, unita: &str) -> String {
+/// Formatta il solo numero secondo i decimali e il segno del parametro.
+pub fn numero_param(key: &str, valore: f64) -> String {
     let (decimali, segno) = pids::per_key(key)
         .map(|p| (p.decimali, p.con_segno))
         .unwrap_or((2, false));
-    let numero = if segno {
+    if segno {
         num_it_segno(valore, decimali)
     } else {
         num_it(valore, decimali)
-    };
+    }
+}
+
+/// Formatta un valore con l'unità secondo il parametro.
+pub fn valore_con_unita(key: &str, valore: f64, unita: &str) -> String {
+    let numero = numero_param(key, valore);
     if unita.is_empty() {
         numero
     } else {
@@ -53,6 +58,12 @@ pub fn riepilogo(r: &DiagnosisReport, includi_vin: bool) -> String {
     riga(format!("Centraline che rispondono: {}", r.ecu.join(", ")));
     if let Some(t) = &r.tensione {
         riga(format!("Tensione al connettore (adattatore): {t}"));
+    }
+    if let Some(c) = &r.tipo_carburante {
+        riga(format!("Tipo di carburante dichiarato: {c}"));
+    }
+    if let Some(n) = &r.norma_obd {
+        riga(format!("Norma OBD dichiarata: {n}"));
     }
     match (&r.vin, includi_vin) {
         (Some(v), true) => riga(format!("VIN: {v}")),

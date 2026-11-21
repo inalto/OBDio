@@ -124,65 +124,150 @@ pub fn disegna(ui: &mut egui::Ui, arch: &Archivio, o: &Opzioni<'_>) -> bool {
 
     for (i, pannello) in pannelli.iter().enumerate() {
         let ultimo = i + 1 == pannelli.len();
-        let mut plot = Plot::new(format!("{}_{}", o.id, i))
-            .height(altezza)
-            .link_axis(o.id.to_string(), [true, false])
-            .link_cursor(o.id.to_string(), [true, false])
-            .legend(Legend::default().background_alpha(0.55))
-            .y_axis_label(pannello.unita.clone())
-            .y_axis_min_width(56.0)
-            .allow_scroll(false)
-            // Etichette degli assi leggibili anche con pannelli bassi.
-            .grid_spacing(egui::Rangef::new(4.0, 40.0))
-            .set_margin_fraction(egui::vec2(0.0, 0.08));
-        if ultimo {
-            plot = plot.x_axis_label("Tempo (s)");
-        }
-        if o.finestra.is_some() {
-            // In scorrimento l'asse X è guidato dall'app.
-            plot = plot
-                .allow_drag([false, true])
-                .allow_zoom([false, true])
-                .allow_boxed_zoom(false);
-        }
-        plot.show(ui, |p| {
-            for (key, colore) in &pannello.serie {
-                let tr = arch.tracciato(key, da);
-                let nome = nome_di(key, o.sintetico);
-                for (a, b) in &tr.buchi {
-                    p.span(
-                        Span::new("Dato mancante", *a..=*b)
-                            .fill(BUCO)
-                            .border(Stroke::NONE),
-                    );
-                }
-                for tratto in tr.tratti {
-                    // Un punto isolato non forma una linea: lo si raddoppia.
-                    let punti = if tratto.len() == 1 {
-                        vec![tratto[0], [tratto[0][0] + 0.01, tratto[0][1]]]
-                    } else {
-                        tratto
-                    };
-                    p.line(
-                        Line::new(nome.clone(), PlotPoints::new(punti))
-                            .color(*colore)
-                            .width(1.6),
-                    );
-                }
-            }
-            for m in arch.marcatori.iter().filter(|m| m.t >= da) {
-                p.vline(
-                    // Senza nome: i marcatori sono elencati sopra i grafici, non in legenda.
-                    VLine::new("", m.t)
-                        .color(MARCATORE)
-                        .style(LineStyle::dashed_dense()),
-                );
-            }
-            if let Some(f) = o.finestra {
-                let fine = arch.t_max.max(f);
-                p.set_plot_bounds_x((fine - f)..=fine);
-            }
-        });
+        disegna_pannello(
+            ui,
+            arch,
+            &Riquadro {
+                id_plot: format!("{}_{}", o.id, i),
+                id_gruppo: o.id,
+                unita: &pannello.unita,
+                serie: &pannello.serie,
+                altezza,
+                finestra: o.finestra,
+                sintetico: o.sintetico,
+                asse_x: ultimo,
+                legenda: true,
+            },
+        );
     }
     true
+}
+
+/// Parametri di un singolo riquadro con asse temporale.
+struct Riquadro<'a> {
+    id_plot: String,
+    /// Gruppo con cui l'asse X e il cursore sono collegati.
+    id_gruppo: &'a str,
+    unita: &'a str,
+    serie: &'a [(String, Color32)],
+    altezza: f32,
+    finestra: Option<f64>,
+    sintetico: bool,
+    /// Mostra l'etichetta «Tempo (s)».
+    asse_x: bool,
+    legenda: bool,
+}
+
+/// Inizio della finestra temporale visibile.
+fn inizio_finestra(arch: &Archivio, finestra: Option<f64>) -> f64 {
+    match finestra {
+        Some(f) => (arch.t_max - f).max(0.0),
+        None => 0.0,
+    }
+}
+
+/// Disegna un riquadro: curve con i tratti continui, fasce rosse dove il dato
+/// manca e linee dei marcatori.
+fn disegna_pannello(ui: &mut egui::Ui, arch: &Archivio, pa: &Riquadro<'_>) {
+    let da = inizio_finestra(arch, pa.finestra);
+    let mut plot = Plot::new(&pa.id_plot)
+        .height(pa.altezza)
+        .link_axis(pa.id_gruppo.to_string(), [true, false])
+        .link_cursor(pa.id_gruppo.to_string(), [true, false])
+        .y_axis_label(pa.unita.to_string())
+        .y_axis_min_width(56.0)
+        .allow_scroll(false)
+        // Etichette degli assi leggibili anche con pannelli bassi.
+        .grid_spacing(egui::Rangef::new(4.0, 40.0))
+        .set_margin_fraction(egui::vec2(0.0, 0.08));
+    if pa.legenda {
+        plot = plot.legend(Legend::default().background_alpha(0.55));
+    }
+    if pa.asse_x {
+        plot = plot.x_axis_label("Tempo (s)");
+    }
+    if pa.finestra.is_some() {
+        // In scorrimento l'asse X è guidato dall'app.
+        plot = plot
+            .allow_drag([false, true])
+            .allow_zoom([false, true])
+            .allow_boxed_zoom(false);
+    }
+    plot.show(ui, |p| {
+        for (key, colore) in pa.serie {
+            let tr = arch.tracciato(key, da);
+            let nome = nome_di(key, pa.sintetico);
+            for (a, b) in &tr.buchi {
+                p.span(
+                    Span::new("Dato mancante", *a..=*b)
+                        .fill(BUCO)
+                        .border(Stroke::NONE),
+                );
+            }
+            for tratto in tr.tratti {
+                // Un punto isolato non forma una linea: lo si raddoppia.
+                let punti = if tratto.len() == 1 {
+                    vec![tratto[0], [tratto[0][0] + 0.01, tratto[0][1]]]
+                } else {
+                    tratto
+                };
+                p.line(
+                    Line::new(nome.clone(), PlotPoints::new(punti))
+                        .color(*colore)
+                        .width(1.6),
+                );
+            }
+        }
+        for m in arch.marcatori.iter().filter(|m| m.t >= da) {
+            p.vline(
+                // Senza nome: i marcatori sono elencati sopra i grafici, non in legenda.
+                VLine::new("", m.t)
+                    .color(MARCATORE)
+                    .style(LineStyle::dashed_dense()),
+            );
+        }
+        if let Some(f) = pa.finestra {
+            let fine = arch.t_max.max(f);
+            p.set_plot_bounds_x((fine - f)..=fine);
+        }
+    });
+}
+
+/// Gruppo di assi condiviso da tutti i grafici singoli della pagina Sensori.
+pub const GRUPPO_SENSORI: &str = "sensori";
+
+/// Piccolo grafico di un solo sensore (per la scheda di «Un grafico per
+/// sensore»): stessi tratti, fasce di dato mancante, marcatori, finestra e
+/// asse X collegato degli altri grafici.
+pub fn disegna_sensore(
+    ui: &mut egui::Ui,
+    arch: &Archivio,
+    key: &str,
+    altezza: f32,
+    finestra: Option<f64>,
+    sintetico: bool,
+) {
+    let serie = [(key.to_string(), colore_sensore(key))];
+    disegna_pannello(
+        ui,
+        arch,
+        &Riquadro {
+            id_plot: format!("{GRUPPO_SENSORI}_{key}"),
+            id_gruppo: GRUPPO_SENSORI,
+            unita: &unita_di(arch, key),
+            serie: &serie,
+            altezza,
+            finestra,
+            sintetico,
+            asse_x: false,
+            legenda: false,
+        },
+    );
+}
+
+/// Colore stabile per sensore, scelto dalla chiave.
+pub fn colore_sensore(key: &str) -> Color32 {
+    const TAVOLOZZA: [Color32; 5] = [BLU, ARANCIO, VERDE, ROSA, VIOLA];
+    let somma: usize = key.bytes().map(|b| b as usize).sum();
+    TAVOLOZZA[somma % TAVOLOZZA.len()]
 }

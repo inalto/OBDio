@@ -1,4 +1,4 @@
-//! Le quattro schede dell'interfaccia.
+//! Le schede Connessione, Diagnosi e Sessioni (i sensori sono in `sensori`).
 
 use eframe::egui::{self, Color32, RichText, ScrollArea, Stroke};
 
@@ -18,15 +18,14 @@ use crate::worker::{Comando, Sorgente, StatoConn};
 const ROSSO_SCURO: Color32 = Color32::from_rgb(140, 28, 40);
 
 const EXTRA: [&str; 5] = ["giri", "velocita", "temp_refrigerante", "carico", "map"];
-const MARCATORI_RAPIDI: [&str; 3] = ["Minimo", "2.500 giri", "Velocità costante"];
 
-fn nome_parametro(key: &str) -> String {
+pub(super) fn nome_parametro(key: &str) -> String {
     pids::per_key(key)
         .map(|p| p.nome.clone())
         .unwrap_or_else(|| key.to_string())
 }
 
-fn nome_file(p: &std::path::Path) -> String {
+pub(super) fn nome_file(p: &std::path::Path) -> String {
     p.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default()
@@ -72,6 +71,16 @@ fn disegna_diagnosi(ui: &mut egui::Ui, d: &DiagnosisReport) {
             if let Some(t) = &d.tensione {
                 ui.label("Tensione al connettore");
                 ui.label(format!("{t} (misurata dall'adattatore)"));
+                ui.end_row();
+            }
+            if let Some(c) = &d.tipo_carburante {
+                ui.label("Tipo di carburante");
+                ui.label(format!("{c} (dichiarato dalla centralina)"));
+                ui.end_row();
+            }
+            if let Some(n) = &d.norma_obd {
+                ui.label("Norma OBD");
+                ui.label(format!("{n} (dichiarata dalla centralina)"));
                 ui.end_row();
             }
         });
@@ -388,8 +397,8 @@ impl App {
             if ui.button("Vai ai codici guasto").clicked() {
                 self.scheda = Scheda::Diagnosi;
             }
-            if ui.button("Vai ai dati in tempo reale").clicked() {
-                self.scheda = Scheda::Live;
+            if ui.button("Vai ai sensori").clicked() {
+                self.scheda = Scheda::Sensori;
             }
         });
         if let Some(g) = &info.gatt {
@@ -873,279 +882,6 @@ impl App {
     }
 
     // ------------------------------------------------------------------
-    // Dati in tempo reale
-    // ------------------------------------------------------------------
-
-    pub(crate) fn pagina_live(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::left("live_sinistra")
-            .resizable(false)
-            .exact_size(340.0)
-            .show(ui, |ui| {
-                ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| self.live_controlli(ui));
-            });
-        egui::CentralPanel::default().show(ui, |ui| self.live_grafici(ui));
-    }
-
-    fn live_controlli(&mut self, ui: &mut egui::Ui) {
-        ui.label(RichText::new("Diagnosi P0420").heading());
-        if !self.collegato() {
-            ui.label(
-                RichText::new("Non collegato: collega l'adattatore o avvia la demo.").color(GIALLO),
-            );
-        }
-        let sintetico = if self.live_demo { " (sintetico)" } else { "" };
-        for (titolo, scelta) in [
-            ("B1S1, a monte", self.preset.b1s1.clone()),
-            ("B1S2, a valle", self.preset.b1s2.clone()),
-        ] {
-            match scelta {
-                Some(k) => {
-                    let p = pids::per_key(&k);
-                    ui.label(format!(
-                        "{}{} [{}]",
-                        nome_parametro(&k),
-                        sintetico,
-                        p.map(|p| p.unita).unwrap_or("")
-                    ));
-                }
-                None if self.collegato() => {
-                    ui.label(
-                        RichText::new(format!(
-                            "Sonda {titolo}: nessun segnale esposto dalla centralina"
-                        ))
-                        .color(GRIGIO),
-                    );
-                }
-                None => {}
-            }
-        }
-        let mut cambiata = false;
-        let voci: Vec<(String, bool)> = self
-            .preset
-            .base
-            .iter()
-            .chain(self.preset.opzionali.iter())
-            .cloned()
-            .collect();
-        let n_base = self.preset.base.len();
-        for (i, (k, supportato)) in voci.iter().enumerate() {
-            if i == n_base {
-                ui.label(
-                    RichText::new("Parametri selezionabili")
-                        .small()
-                        .color(GRIGIO),
-                );
-            }
-            let mut attivo = self.selezione.get(k).copied().unwrap_or(false);
-            let testo = if *supportato {
-                nome_parametro(k)
-            } else {
-                format!("{} — non supportato", nome_parametro(k))
-            };
-            if ui
-                .add_enabled(*supportato, egui::Checkbox::new(&mut attivo, testo))
-                .changed()
-            {
-                self.selezione.insert(k.clone(), attivo);
-                cambiata = true;
-            }
-        }
-        if cambiata && self.polling {
-            self.avvia_polling();
-        }
-
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if self.polling {
-                if ui
-                    .add_enabled(
-                        self.registrazione.is_none(),
-                        egui::Button::new("Ferma lettura"),
-                    )
-                    .clicked()
-                {
-                    self.invia(Comando::FermaPolling);
-                }
-            } else if ui
-                .add_enabled(self.pronto(), egui::Button::new("Avvia lettura"))
-                .clicked()
-            {
-                self.avvia_polling();
-            }
-        });
-
-        ui.add_space(8.0);
-        ui.label(RichText::new("Registrazione").heading());
-        if let Some(r) = &self.registrazione {
-            let s = (self.live.t_max - r.t_inizio).max(0.0) as u64;
-            let nome = nome_file(&r.percorso);
-            if ui
-                .button(RichText::new("Ferma registrazione").color(ROSSO))
-                .clicked()
-            {
-                self.invia(Comando::FermaRegistrazione);
-            }
-            ui.label(format!("In corso da {:02}:{:02}", s / 60, s % 60));
-            ui.label(RichText::new(nome).small().color(GRIGIO));
-        } else if ui
-            .add_enabled(self.pronto(), egui::Button::new("Avvia registrazione"))
-            .clicked()
-        {
-            if !self.polling {
-                self.avvia_polling();
-            }
-            self.invia(Comando::AvviaRegistrazione);
-        }
-        ui.label(
-            RichText::new(
-                "La registrazione prosegue anche con la finestra ridotta a icona. Durante la \
-                 registrazione le sonde vengono lette più spesso degli altri parametri.",
-            )
-            .small()
-            .color(GRIGIO),
-        );
-
-        ui.add_space(6.0);
-        ui.label(RichText::new("Marcatori").strong());
-        let attivi = self.collegato() && self.polling;
-        ui.horizontal_wrapped(|ui| {
-            for m in MARCATORI_RAPIDI {
-                if ui.add_enabled(attivi, egui::Button::new(m)).clicked() {
-                    self.invia(Comando::Marcatore(m.to_string()));
-                }
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.testo_marcatore)
-                    .hint_text("Altro marcatore…")
-                    .desired_width(190.0),
-            );
-            let testo = self.testo_marcatore.trim().to_string();
-            if ui
-                .add_enabled(attivi && !testo.is_empty(), egui::Button::new("Aggiungi"))
-                .clicked()
-            {
-                self.invia(Comando::Marcatore(testo));
-                self.testo_marcatore.clear();
-            }
-        });
-
-        if let Some(u) = &self.ultima {
-            ui.add_space(8.0);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(RichText::new("Ultima sessione salvata").strong());
-                ui.label(format!("{} campioni", num_it(u.campioni as f64, 0)));
-                ui.label(RichText::new(nome_file(&u.percorso)).small());
-                match &u.csv {
-                    Some(c) => ui.label(RichText::new(format!("CSV: {}", nome_file(c))).small()),
-                    None => ui.label(RichText::new("CSV non scritto").small().color(ROSSO)),
-                };
-                if ui.button("Apri la cartella").clicked() {
-                    apri_cartella(&self.cartella);
-                }
-            });
-        }
-
-        ui.add_space(8.0);
-        ui.label(RichText::new("Valori attuali").heading());
-        let (chiavi, _) = self.chiavi_polling();
-        egui::Grid::new("live_valori")
-            .num_columns(3)
-            .striped(true)
-            .spacing([10.0, 4.0])
-            .show(ui, |ui| {
-                ui.label(RichText::new("Parametro").strong());
-                ui.label(RichText::new("Valore").strong());
-                ui.label(RichText::new("Hz").strong());
-                ui.end_row();
-                for k in &chiavi {
-                    let nome = pids::per_key(k)
-                        .map(|p| {
-                            p.nome
-                                .replace("Sonda ", "")
-                                .replace(" (a monte)", "")
-                                .replace(" (a valle)", "")
-                        })
-                        .unwrap_or_else(|| k.clone());
-                    ui.label(nome);
-                    match self.live.ultimo(k) {
-                        Some(p) => match p.v {
-                            Some(v) => {
-                                let unita = pids::per_key(k).map(|p| p.unita).unwrap_or("");
-                                ui.label(RichText::new(valore_con_unita(k, v, unita)).strong());
-                            }
-                            None => etichetta_stato(ui, p.stato),
-                        },
-                        None => {
-                            ui.label(RichText::new("in attesa").color(GRIGIO));
-                        }
-                    }
-                    match self.live.frequenza(k) {
-                        Some(hz) => ui.label(num_it(hz, 1)),
-                        None => ui.label(RichText::new("—").color(GRIGIO)),
-                    };
-                    ui.end_row();
-                }
-            });
-        ui.label(
-            RichText::new("Hz = frequenza effettiva di aggiornamento negli ultimi 5 secondi.")
-                .small()
-                .color(GRIGIO),
-        );
-    }
-
-    fn live_grafici(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Finestra:");
-            for (valore, nome) in [
-                (Some(30.0), "30 s"),
-                (Some(60.0), "60 s"),
-                (Some(120.0), "2 min"),
-                (Some(300.0), "5 min"),
-                (None, "Tutto"),
-            ] {
-                ui.selectable_value(&mut self.finestra, valore, nome);
-            }
-            ui.separator();
-            selettore_extra(ui, "live_extra", &mut self.extra, &self.live);
-        });
-        ui.label(
-            RichText::new(
-                "I grafici servono a confrontare i segnali. L'app non deduce se catalizzatore o \
-                 sonde siano guasti. Le fasce rosse indicano intervalli senza dato valido.",
-            )
-            .small()
-            .color(GRIGIO),
-        );
-        let disegnato = grafici::disegna(
-            ui,
-            &self.live,
-            &Opzioni {
-                id: "live",
-                b1s1: self.preset.b1s1.as_deref(),
-                b1s2: self.preset.b1s2.as_deref(),
-                extra: self.extra.as_deref(),
-                finestra: self.finestra,
-                sintetico: self.live_demo,
-            },
-        );
-        if !disegnato {
-            ui.add_space(40.0);
-            ui.vertical_centered(|ui| {
-                ui.label(if self.collegato() {
-                    "Premi «Avvia lettura» per vedere i segnali."
-                } else {
-                    "Nessun dato: collega l'adattatore o avvia la demo."
-                });
-            });
-        }
-    }
-
-    // ------------------------------------------------------------------
     // Sessioni
     // ------------------------------------------------------------------
 
@@ -1286,7 +1022,7 @@ impl App {
 }
 
 /// Scelta del parametro aggiuntivo da tracciare.
-fn selettore_extra(
+pub(super) fn selettore_extra(
     ui: &mut egui::Ui,
     id: &str,
     scelta: &mut Option<String>,

@@ -18,6 +18,31 @@ pub struct Serie {
     pub ecu: String,
     pub unita: String,
     pub punti: Vec<Punto>,
+    /// Statistiche correnti dei soli valori validi (mai influenzate dai buchi).
+    pub stat: Statistiche,
+}
+
+/// Minimo, massimo e media corrente di una serie; tutti assenti finché non
+/// arriva un valore valido.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Statistiche {
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+    pub conteggio: u64,
+    pub somma: f64,
+}
+
+impl Statistiche {
+    pub fn aggiungi(&mut self, v: f64) {
+        self.min = Some(self.min.map_or(v, |m| m.min(v)));
+        self.max = Some(self.max.map_or(v, |m| m.max(v)));
+        self.conteggio += 1;
+        self.somma += v;
+    }
+
+    pub fn media(&self) -> Option<f64> {
+        (self.conteggio > 0).then(|| self.somma / self.conteggio as f64)
+    }
 }
 
 /// Oltre questo intervallo senza campioni validi la linea viene spezzata.
@@ -59,10 +84,20 @@ impl Archivio {
             v: c.valore,
             stato: c.stato,
         });
+        if let Some(v) = c.valore {
+            s.stat.aggiungi(v);
+        }
         if s.punti.len() > MAX_PUNTI {
             s.punti.drain(..MAX_PUNTI / 4);
         }
         self.t_max = self.t_max.max(c.t);
+    }
+
+    /// Riparte da zero con minimo, massimo e media di ogni serie.
+    pub fn azzera_statistiche(&mut self) {
+        for s in self.serie.values_mut() {
+            s.stat = Statistiche::default();
+        }
     }
 
     pub fn da_sessione(s: &SessionData) -> Self {
@@ -99,7 +134,9 @@ impl Archivio {
     pub fn pid_presenti(&self) -> BTreeSet<u8> {
         self.serie
             .keys()
-            .filter_map(|k| crate::obd::pids::per_key(k).map(|p| p.pid))
+            .filter_map(|k| crate::obd::pids::per_key(k))
+            .filter(|p| !p.derivato)
+            .map(|p| p.pid)
             .collect()
     }
 
@@ -194,6 +231,34 @@ mod tests {
         assert_eq!(tr.tratti[0], vec![[0.0, 1.0], [0.5, 2.0]]);
         assert_eq!(tr.tratti[1], vec![[2.0, 3.0], [2.5, 4.0]]);
         assert_eq!(tr.buchi, vec![(0.5, 2.0), (2.5, 7.5)]);
+    }
+
+    #[test]
+    fn statistiche_solo_sui_valori_validi() {
+        let mut a = Archivio::default();
+        assert_eq!(a.serie.get("giri").map(|s| s.stat.media()), None);
+        for (t, v) in [
+            (0.0, Some(10.0)),
+            (0.5, None),
+            (1.0, Some(30.0)),
+            (1.5, Some(20.0)),
+        ] {
+            a.aggiungi(&c(t, "giri", if v.is_some() { "7E8" } else { "" }, v));
+        }
+        let st = a.serie["giri"].stat;
+        assert_eq!((st.min, st.max, st.conteggio), (Some(10.0), Some(30.0), 3));
+        assert_eq!(st.media(), Some(20.0));
+        // Una serie con soli errori non ha statistiche (mai zero).
+        a.aggiungi(&c(0.0, "map", "", None));
+        let vuota = a.serie["map"].stat;
+        assert_eq!((vuota.min, vuota.max, vuota.media()), (None, None, None));
+
+        a.azzera_statistiche();
+        assert_eq!(a.serie["giri"].stat, Statistiche::default());
+        assert_eq!(a.serie["giri"].punti.len(), 4);
+        a.aggiungi(&c(2.0, "giri", "7E8", Some(5.0)));
+        assert_eq!(a.serie["giri"].stat.min, Some(5.0));
+        assert_eq!(a.serie["giri"].stat.media(), Some(5.0));
     }
 
     #[test]

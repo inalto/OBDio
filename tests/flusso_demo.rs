@@ -222,6 +222,107 @@ fn flusso_completo_in_demo() {
 }
 
 #[test]
+fn distanza_parziale_calcolata_dal_worker_e_registrata() {
+    let dir = cartella("distanza");
+    let (tx, rx, handle) = worker::avvia(dir.clone(), || {});
+    // Scenario già a regime (69 km/h) fin dal primo campione.
+    let demo = DemoTransport::con_latenza(Duration::from_millis(3)).con_fase(55.0);
+    tx.send(Comando::Collega(Sorgente::Trasporto(Box::new(demo))))
+        .unwrap();
+    connessione(&rx);
+
+    // La registrazione parte prima della lettura, così il primo campione è registrato.
+    tx.send(Comando::AvviaRegistrazione).unwrap();
+    let percorso = attendi(&rx, 10, |e| match e {
+        Evento::RegistrazioneAvviata { percorso, .. } => Some(percorso),
+        _ => None,
+    });
+    // Si chiede solo la velocità: la distanza è calcolata, mai richiesta.
+    tx.send(Comando::AvviaPolling {
+        chiavi: vec!["velocita".into()],
+        prioritarie: vec![],
+    })
+    .unwrap();
+
+    let mut distanze: Vec<f64> = Vec::new();
+    let mut velocita = 0usize;
+    let fine = Instant::now() + Duration::from_millis(2000);
+    while Instant::now() < fine {
+        if let Ok(Evento::Campioni(v)) = rx.recv_timeout(Duration::from_millis(200)) {
+            for c in v {
+                match c.key.as_str() {
+                    "velocita" => {
+                        assert_eq!(c.valore, Some(69.0));
+                        velocita += 1;
+                    }
+                    "distanza_parziale" => {
+                        assert_eq!(c.unita, "km");
+                        assert_eq!(c.stato, Stato::Ok);
+                        assert_eq!(c.ecu, "7E8");
+                        distanze.push(c.valore.expect("la distanza ha sempre un valore"));
+                    }
+                    altro => panic!("parametro non richiesto: {altro}"),
+                }
+            }
+        }
+    }
+    // Un campione di distanza per ogni velocità valida; riparte da zero.
+    assert!(velocita > 10, "troppo pochi campioni: {velocita}");
+    assert_eq!(distanze.len(), velocita);
+    assert_eq!(distanze[0], 0.0);
+    assert!(distanze.windows(2).all(|w| w[0] <= w[1]));
+    // 69 km/h per circa 2 s sono circa 38 m; mai più della durata attesa.
+    let ultima = *distanze.last().unwrap();
+    assert!(ultima > 0.005 && ultima < 0.06, "distanza {ultima} km");
+
+    tx.send(Comando::FermaRegistrazione).unwrap();
+    let (chiuso, csv, n) = attendi(&rx, 10, |e| match e {
+        Evento::RegistrazioneFermata {
+            percorso,
+            csv,
+            campioni,
+        } => Some((percorso, csv, campioni)),
+        _ => None,
+    });
+    assert_eq!(chiuso, percorso);
+    let csv = csv.expect("CSV non scritto");
+    tx.send(Comando::Scollega).unwrap();
+    tx.send(Comando::Esci).unwrap();
+    handle.join().unwrap();
+
+    // La distanza è nella sessione registrata, con gli stessi valori.
+    let s = recording::carica(&percorso).unwrap();
+    assert_eq!(s.campioni.len(), n);
+    let registrate: Vec<f64> = s
+        .campioni
+        .iter()
+        .filter(|c| c.key == "distanza_parziale")
+        .map(|c| c.valore.unwrap())
+        .collect();
+    assert!(registrate.len() >= distanze.len());
+    assert!(registrate.windows(2).all(|w| w[0] <= w[1]));
+    // Stessi valori, salvo l'ultima cifra della lettura del JSON.
+    assert!(
+        registrate
+            .iter()
+            .zip(&distanze)
+            .all(|(r, d)| (r - d).abs() < 1e-9)
+    );
+
+    // E nel CSV, con unità e stato.
+    let testo = std::fs::read_to_string(&csv).unwrap();
+    let righe: Vec<&str> = testo
+        .lines()
+        .filter(|r| r.contains(",distanza_parziale,"))
+        .collect();
+    assert_eq!(righe.len(), registrate.len());
+    assert!(righe.iter().all(
+        |r| r.contains(",Distanza parziale calcolata,") && r.contains(",km,ok,demo_sintetico")
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn cancellazione_dei_codici_in_demo() {
     use obdio::elm::{ConfermaCancellazione, EsitoCancellazione, RispostaCancellazione};
 

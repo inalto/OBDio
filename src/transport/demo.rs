@@ -19,9 +19,9 @@ use super::{Scollegato, Transport};
 use crate::obd::mask_from_supported;
 
 const ECU: &str = "7E8";
-const PID_SERVIZIO_01: [u8; 23] = [
+const PID_SERVIZIO_01: [u8; 24] = [
     0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x11, 0x13, 0x15, 0x1C, 0x1F,
-    0x20, 0x21, 0x24, 0x33, 0x40, 0x42, 0x44,
+    0x20, 0x21, 0x24, 0x33, 0x40, 0x42, 0x44, 0x51,
 ];
 const PID_SERVIZIO_02: [u8; 9] = [0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 0x0D];
 const VIN_FINTO: &[u8; 17] = b"DEMO0000000000000";
@@ -73,6 +73,16 @@ impl DemoTransport {
             chiuso: false,
             codici_cancellati: false,
         }
+    }
+
+    /// Fa partire lo scenario di guida da `secondi` dopo l'inizio del ciclo
+    /// (per le verifiche: dopo 50 s la velocità è già a regime, 69 km/h).
+    pub fn con_fase(mut self, secondi: f64) -> Self {
+        let ora = Instant::now();
+        self.t0 = ora
+            .checked_sub(Duration::from_secs_f64(secondi.max(0.0)))
+            .unwrap_or(ora);
+        self
     }
 
     /// Interruttore per simulare la caduta del collegamento (verifiche).
@@ -306,6 +316,8 @@ impl DemoTransport {
             0x33 => vec![100],
             0x42 => parola(13_900.0),
             0x44 => parola(32768.0),
+            // Benzina.
+            0x51 => vec![0x01],
             _ => return None,
         })
     }

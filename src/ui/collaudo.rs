@@ -9,8 +9,9 @@ use std::time::Instant;
 
 use eframe::egui;
 
-use super::{App, Scheda};
+use super::{App, Scheda, VistaSensori};
 use crate::elm::ConfermaCancellazione;
+use crate::obd::pids;
 use crate::worker::{Comando, Sorgente};
 
 pub struct Collaudo {
@@ -99,8 +100,21 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
         }
         5 if c.secondi() > 0.6 => scatta(&mut c, "2_fermo_immagine"),
         6 => {
-            app.scheda = Scheda::Live;
-            for k in ["carico", "map"] {
+            app.scheda = Scheda::Sensori;
+            // Oltre al preset P0420 (7 parametri): altri 9 sensori reali del
+            // simulatore e la distanza parziale calcolata.
+            for k in [
+                "carico",
+                "map",
+                "temp_aspirazione",
+                "anticipo",
+                "farfalla",
+                "pressione_barometrica",
+                "tensione_modulo",
+                "lambda_comandato",
+                "tempo_motore",
+                pids::CHIAVE_DISTANZA_PARZIALE,
+            ] {
                 app.selezione.insert(k.to_string(), true);
             }
             app.extra = Some("giri".into());
@@ -118,50 +132,62 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
         }
         // Oltre il secondo 50 la demo ha simulato un'interruzione della sonda a valle.
         9 if app.live.t_max > 56.0 => scatta(&mut c, "3_tempo_reale"),
+        // Un grafico per sensore: dieci sensori selezionati, in cima e poi in fondo.
         10 => {
+            app.vista = VistaSensori::PerSensore;
+            c.avanti();
+        }
+        11 if c.secondi() > 1.0 => scatta(&mut c, "3b_un_grafico_per_sensore"),
+        12 => {
+            app.scorri_sensori = Some(10_000.0);
+            c.avanti();
+        }
+        13 if c.secondi() > 0.8 => scatta(&mut c, "3c_un_grafico_per_sensore_in_fondo"),
+        14 => {
+            app.vista = VistaSensori::Confronto;
             app.invia(Comando::FermaRegistrazione);
             c.avanti();
         }
-        11 if app.ultima.is_some() && c.secondi() > 0.5 => scatta(&mut c, "4_sessione_salvata"),
-        12 => {
+        15 if app.ultima.is_some() && c.secondi() > 0.5 => scatta(&mut c, "4_sessione_salvata"),
+        16 => {
             if let Some(u) = &app.ultima {
                 app.apri_sessione(u.percorso.clone());
             }
             app.scheda = Scheda::Sessioni;
             c.avanti();
         }
-        13 if app.aperta.is_some() && c.secondi() > 0.8 => scatta(&mut c, "5_sessione_riaperta"),
-        14 => {
+        17 if app.aperta.is_some() && c.secondi() > 0.8 => scatta(&mut c, "5_sessione_riaperta"),
+        18 => {
             app.scheda = Scheda::Connessione;
             c.avanti();
         }
-        15 if c.secondi() > 0.5 => scatta(&mut c, "6_collegato"),
+        19 if c.secondi() > 0.5 => scatta(&mut c, "6_collegato"),
         // Cancellazione dei codici sul simulatore: conferma, poi esito.
-        16 => {
+        20 => {
             app.scheda = Scheda::Diagnosi;
             app.conferma_cancellazione = Some(true);
             c.avanti();
         }
-        17 if c.secondi() > 0.6 => scatta(&mut c, "7_conferma_cancellazione"),
-        18 => {
+        21 if c.secondi() > 0.6 => scatta(&mut c, "7_conferma_cancellazione"),
+        22 => {
             app.conferma_cancellazione = None;
             app.invia(Comando::CancellaDtc(
                 ConfermaCancellazione::utente_ha_confermato(),
             ));
             c.avanti();
         }
-        19 if app.esito_cancellazione.is_some()
+        23 if app.esito_cancellazione.is_some()
             && app.pronto()
             && app.diagnosi.as_ref().is_some_and(|d| !d.fermo.presente)
             && c.secondi() > 0.8 =>
         {
             scatta(&mut c, "8_esito_cancellazione")
         }
-        20 => {
+        24 => {
             app.invia(Comando::Scollega);
             c.avanti();
         }
-        21 if !app.collegato() && c.secondi() > 0.5 => {
+        25 if !app.collegato() && c.secondi() > 0.5 => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             c.avanti();
         }
