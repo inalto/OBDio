@@ -187,7 +187,20 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             app.invia(Comando::Scollega);
             c.avanti();
         }
+        // Impostazioni, con valori d'esempio (nulla viene salvato né applicato).
         25 if !app.collegato() && c.secondi() > 0.5 => {
+            let f = &mut app.impostazioni.form;
+            f.attivo = true;
+            f.host = "192.168.1.10".into();
+            f.utente = "obdio".into();
+            f.password = "esempio".into();
+            f.veicolo = "Fiat Panda".into();
+            f.discovery_home_assistant = true;
+            app.scheda = Scheda::Impostazioni;
+            c.avanti();
+        }
+        26 if c.secondi() > 0.6 => scatta(&mut c, "9_impostazioni"),
+        27 => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             c.avanti();
         }
