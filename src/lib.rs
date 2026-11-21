@@ -10,6 +10,7 @@
 //! - [`worker`]: thread di lavoro con stati espliciti;
 //! - [`ui`]: interfaccia egui.
 
+pub mod config;
 pub mod diagnosis;
 pub mod elm;
 pub mod model;
