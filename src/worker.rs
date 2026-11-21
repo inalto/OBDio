@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use crate::diagnosis::{self, Contesto, DiagnosisReport};
 use crate::elm::{ConfermaCancellazione, Elm, ElmError, Esito, EsitoCancellazione};
 use crate::model::{Marker, Sample, Stato, adesso_iso};
+use crate::mqtt::{MqttConfig, MqttPublisher, StatoMqtt, StatoMqttInfo};
 use crate::obd::ObdRequest;
 use crate::obd::frames::BusKind;
 use crate::obd::pids::{self, Decodifica};
@@ -52,6 +53,8 @@ pub enum Comando {
     AvviaRegistrazione,
     FermaRegistrazione,
     Marcatore(String),
+    /// Avvia, riavvia o ferma la pubblicazione MQTT secondo la configurazione.
+    ConfiguraMqtt(MqttConfig),
     Esci,
 }
 
@@ -189,6 +192,8 @@ pub enum Evento {
     },
     Errore(ErroreUtente),
     Registro(Vec<String>),
+    /// Stato della pubblicazione MQTT (a ogni cambiamento, al più due volte al secondo).
+    Mqtt(StatoMqttInfo),
 }
 
 /// Esito della cancellazione dei codici guasto visto dall'interfaccia.
@@ -343,6 +348,9 @@ struct Worker {
     ble: Option<BleManager>,
     scansione: Option<(Instant, Instant)>,
     link: Option<Link>,
+    mqtt: Option<MqttPublisher>,
+    /// Ultimo stato MQTT comunicato all'interfaccia e quando.
+    mqtt_inviato: Option<(StatoMqttInfo, Instant)>,
 }
 
 /// Avvia il thread di lavoro. `notifica` viene chiamata dopo ogni evento
@@ -365,6 +373,8 @@ pub fn avvia(
                 ble: None,
                 scansione: None,
                 link: None,
+                mqtt: None,
+                mqtt_inviato: None,
             }
             .esegui();
         })
@@ -406,9 +416,71 @@ impl Worker {
             }
             self.passo_scansione();
             self.passo_polling();
+            self.passo_mqtt();
         }
         self.ferma_scansione();
         self.chiudi_link(None, false);
+        if let Some(m) = self.mqtt.take() {
+            m.ferma();
+        }
+    }
+
+    // ---- MQTT ----------------------------------------------------------
+
+    /// Avvia, riavvia o ferma il pubblicatore. Non blocca oltre la chiusura
+    /// pulita del precedente (al più un paio di secondi).
+    fn configura_mqtt(&mut self, config: MqttConfig) {
+        if let Some(m) = self.mqtt.take() {
+            m.ferma();
+        }
+        self.mqtt_inviato = None;
+        if !config.attivo {
+            self.invia(Evento::Mqtt(StatoMqttInfo::disattivato()));
+            return;
+        }
+        match MqttPublisher::avvia(&config) {
+            Ok(m) => {
+                if let Some(l) = &self.link {
+                    m.collegato(l.info.demo);
+                }
+                self.mqtt = Some(m);
+                self.passo_mqtt();
+            }
+            Err(e) => self.invia(Evento::Mqtt(StatoMqttInfo {
+                stato: StatoMqtt::Errore(e.clone()),
+                pubblicati: 0,
+                scartati: 0,
+                ultimo_errore: Some(e),
+            })),
+        }
+    }
+
+    /// Comunica all'interfaccia i cambiamenti di stato MQTT.
+    fn passo_mqtt(&mut self) {
+        let Some(m) = &self.mqtt else {
+            return;
+        };
+        let info = m.stato();
+        let da_inviare = match &self.mqtt_inviato {
+            None => true,
+            Some((u, t)) => *u != info && t.elapsed() >= Duration::from_millis(500),
+        };
+        if da_inviare {
+            self.mqtt_inviato = Some((info.clone(), Instant::now()));
+            self.invia(Evento::Mqtt(info));
+        }
+    }
+
+    fn mqtt_diagnosi(&self, report: &DiagnosisReport) {
+        if let Some(m) = &self.mqtt {
+            m.diagnosi(report);
+        }
+    }
+
+    fn mqtt_cancellazione(&self, r: &RisultatoCancellazione) {
+        if let Some(m) = &self.mqtt {
+            m.cancellazione(&r.esito, &r.eseguita_il);
+        }
     }
 
     /// Restituisce `false` quando il thread deve terminare.
@@ -458,6 +530,7 @@ impl Worker {
             }
             Comando::AvviaRegistrazione => self.avvia_registrazione(),
             Comando::FermaRegistrazione => self.ferma_registrazione(),
+            Comando::ConfiguraMqtt(config) => self.configura_mqtt(config),
             Comando::Marcatore(etichetta) => {
                 let Some(l) = self.link.as_mut() else {
                     return true;
@@ -472,6 +545,9 @@ impl Worker {
                     && let Err(e) = r.marcatore(&m)
                 {
                     errore = Some(e.to_string());
+                }
+                if let Some(mq) = &self.mqtt {
+                    mq.marcatore(&m);
                 }
                 self.invia(Evento::Marcatore(m));
                 if let Some(e) = errore {
@@ -703,6 +779,9 @@ impl Worker {
             avvisi,
         };
         self.invia(Evento::Connesso(Box::new(info.clone())));
+        if let Some(m) = &self.mqtt {
+            m.collegato(info.demo);
+        }
         self.link = Some(Link {
             elm,
             info,
@@ -726,6 +805,9 @@ impl Worker {
         self.ferma_registrazione();
         if let Some(mut l) = self.link.take() {
             l.elm.chiudi();
+        }
+        if let Some(m) = &self.mqtt {
+            m.scollegato();
         }
         if notifica {
             self.invia(Evento::Polling(false));
@@ -760,6 +842,7 @@ impl Worker {
                     errore = Some(e.to_string());
                 }
                 l.diagnosi = Some(report.clone());
+                self.mqtt_diagnosi(&report);
                 self.invia(Evento::Registro(registro));
                 self.invia(Evento::Diagnosi(Box::new(report)));
                 self.stato(StatoConn::Connesso);
@@ -836,6 +919,7 @@ impl Worker {
             if let Some(r) = l.recorder.as_mut() {
                 annota(r.diagnosi(&report));
             }
+            self.mqtt_diagnosi(&report);
             self.invia(Evento::Diagnosi(Box::new(report.clone())));
             l.diagnosi = Some(report);
         }
@@ -865,17 +949,19 @@ impl Worker {
         let esito = match l.elm.cancella_dtc(conferma) {
             Ok(e) => e,
             Err(s) => {
-                self.invia(Evento::CancellazioneDtc(Box::new(risultato(
-                    EsitoCancellazione::ErroreComunicazione(format!(
-                        "collegamento interrotto durante la cancellazione, esito sconosciuto: {}",
-                        s.0
-                    )),
-                ))));
+                let r = risultato(EsitoCancellazione::ErroreComunicazione(format!(
+                    "collegamento interrotto durante la cancellazione, esito sconosciuto: {}",
+                    s.0
+                )));
+                self.mqtt_cancellazione(&r);
+                self.invia(Evento::CancellazioneDtc(Box::new(r)));
                 return FineCancellazione::Caduta(s.0);
             }
         };
         let accettata = esito.accettata();
-        self.invia(Evento::CancellazioneDtc(Box::new(risultato(esito))));
+        let r = risultato(esito);
+        self.mqtt_cancellazione(&r);
+        self.invia(Evento::CancellazioneDtc(Box::new(r)));
         let m = Marker {
             t: l.t0.elapsed().as_secs_f64(),
             ts: adesso_iso(),
@@ -900,6 +986,7 @@ impl Worker {
         if let Some(r) = l.recorder.as_mut() {
             annota(r.diagnosi(&report));
         }
+        self.mqtt_diagnosi(&report);
         self.invia(Evento::Diagnosi(Box::new(report.clone())));
         l.diagnosi = Some(report);
         FineCancellazione::Completata { errore_file }
@@ -1000,6 +1087,10 @@ impl Worker {
             }
         }
         let troppi_errori = l.errori_di_fila >= MAX_ERRORI_DI_FILA;
+        // Non blocca mai: la coda verso il broker scarta se è piena.
+        if let Some(m) = &self.mqtt {
+            m.campioni(&campioni);
+        }
         self.invia(Evento::Campioni(campioni));
         if let Some(e) = errore_file {
             self.errore_registrazione(e);

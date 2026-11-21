@@ -33,7 +33,7 @@ superati, il collaudo automatico dell'interfaccia in demo e un commit.
 | 2 | Catalogo PID esteso (contachilometri, pedale, coppia, consumo…); pagina **Sensori** con tutti i parametri supportati, ricerca, min/medio/max, un grafico per sensore; grandezze calcolate (distanza parziale) | Sonnet | fatto |
 | 3 | **Cruscotto** personalizzabile: tema e token, sette tipi di strumento, griglia, modo modifica, ispettore, pagine, modelli pronti, salvataggio, import/export dei cruscotti | Opus | fatto |
 | 4 | Importazione ed esportazione dei dati (sessione, CSV OBDio, CSV in formato Torque, diagnosi JSON) e **riproduzione** in tempo reale con pausa, posizione e velocità | Opus | |
-| 5 | Pubblicazione **MQTT** in tempo reale: impostazioni, stato in linea/non in linea, un argomento per sensore più uno JSON cumulativo, discovery per Home Assistant | Sonnet | |
+| 5 | Pubblicazione **MQTT** in tempo reale: impostazioni, stato in linea/non in linea, un argomento per sensore più uno JSON cumulativo, discovery per Home Assistant | Sonnet | fatto |
 | 6 | Rifinitura: navigazione a sei destinazioni, layout stretto per telefono, barra di stato, pagina Impostazioni | Opus | |
 | 7 | Base Android (libreria `cdylib`, funzioni desktop dietro `cfg`), guida alla compilazione, README, pacchetto Windows | Haiku (documenti), Sonnet (codice) | |
 

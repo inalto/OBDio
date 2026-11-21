@@ -23,6 +23,7 @@ mod collaudo;
 mod cruscotto;
 pub mod dati;
 mod grafici;
+mod impostazioni;
 mod pagine;
 mod sensori;
 pub(crate) mod tema;
@@ -42,6 +43,7 @@ pub(crate) enum Scheda {
     Cruscotto,
     Sensori,
     Sessioni,
+    Impostazioni,
 }
 
 pub(crate) struct Registrazione {
@@ -121,6 +123,8 @@ pub struct App {
 
     // Cruscotto
     pub(crate) cruscotto: cruscotto::StatoCruscotto,
+    // Impostazioni (MQTT)
+    pub(crate) impostazioni: impostazioni::Impostazioni,
 
     #[cfg(feature = "collaudo")]
     collaudo: Option<collaudo::Collaudo>,
@@ -145,6 +149,10 @@ impl App {
         let ctx = cc.egui_ctx.clone();
         let (tx, rx, lavoro) = worker::avvia(cartella.clone(), move || ctx.request_repaint());
         let _ = tx.send(Comando::ElencaSeriali);
+        let impostazioni = impostazioni::Impostazioni::carica();
+        if impostazioni.form.attivo {
+            let _ = tx.send(Comando::ConfiguraMqtt(impostazioni.form.clone()));
+        }
         App {
             tx,
             rx,
@@ -185,6 +193,7 @@ impl App {
             caricamento: None,
             errore_sessione: None,
             cruscotto: cruscotto::StatoCruscotto::carica(),
+            impostazioni,
             #[cfg(feature = "collaudo")]
             collaudo: collaudo::Collaudo::da_ambiente(),
         }
@@ -302,6 +311,7 @@ impl App {
                     }
                     self.errore = Some(e);
                 }
+                Evento::Mqtt(info) => self.impostazioni.info = info,
                 Evento::Registro(righe) => {
                     self.registro.extend(righe);
                     if self.registro.len() > 600 {
@@ -355,6 +365,7 @@ impl App {
                 (Scheda::Cruscotto, "Cruscotto"),
                 (Scheda::Sensori, "Sensori"),
                 (Scheda::Sessioni, "Sessioni salvate"),
+                (Scheda::Impostazioni, "Impostazioni"),
             ] {
                 ui.selectable_value(&mut self.scheda, scheda, nome);
             }
@@ -375,6 +386,9 @@ impl App {
                 } else if self.polling {
                     ui.label(RichText::new("Lettura dati attiva").color(VERDE));
                 }
+                if let Some((testo, colore)) = self.impostazioni.testo_barra() {
+                    ui.label(RichText::new(testo).color(colore));
+                }
             });
         });
         ui.add_space(2.0);
@@ -393,6 +407,7 @@ impl App {
                     || self.diagnosi.as_ref().is_some_and(|d| d.demo)
             }
             Scheda::Connessione => self.info.as_ref().is_some_and(|i| i.demo),
+            Scheda::Impostazioni => false,
         };
         if demo_in_vista {
             egui::Frame::new()
@@ -466,6 +481,7 @@ impl eframe::App for App {
             Scheda::Cruscotto => self.pagina_cruscotto(ui),
             Scheda::Sensori => self.pagina_sensori(ui),
             Scheda::Sessioni => self.pagina_sessioni(ui),
+            Scheda::Impostazioni => self.pagina_impostazioni(ui),
         });
         // Sopra a tutto, qualunque sia la scheda.
         let ctx = ui.ctx().clone();

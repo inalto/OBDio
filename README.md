@@ -358,6 +358,15 @@ centraline rifiutano la richiesta.
 > e con risposte a copione (accettata, rifiutata `7F 04 22`, nessuna risposta,
 > collegamento caduto). **Non è mai stata provata su un veicolo.**
 
+## MQTT
+
+OBDio può pubblicare i dati in tempo reale su un broker MQTT (per esempio per
+Home Assistant): un argomento per sensore, un JSON con tutti i valori, la
+diagnosi e gli eventi. Si attiva dalla scheda **Impostazioni**; la
+pubblicazione non rallenta mai la lettura. Il VIN non viene mai pubblicato e la
+connessione **non è cifrata** (TLS non è supportato in questa versione).
+Argomenti, esempi, discovery e note di sicurezza: [docs/MQTT.md](docs/MQTT.md).
+
 ## Stato delle verifiche
 
 ### Adattatori Carista: cosa è documentato
@@ -394,12 +403,14 @@ non è verificabile: è un'ipotesi, non un dato.
 
 | Verifica | Esito |
 |---|---|
-| Test automatici (95): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
+| Test automatici (145): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
 | Flusso demo attraverso il thread di lavoro reale: collegamento, P0420, fermo immagine, polling con priorità alle sonde, registrazione, CSV, riapertura | Superato |
 | Distanza parziale attraverso il thread di lavoro reale: campioni monotoni in km, registrati nella sessione e nel CSV | Superato |
 | Cancellazione dei codici in demo attraverso il thread di lavoro reale: copia della diagnosi, servizio 04, rilettura con P0420 solo permanente, MIL spenta, prontezza azzerata | Superato |
 | Finestra di conferma ed esito della cancellazione nell'interfaccia, in demo | Schermate dal collaudo automatico; clic, Esc e Invio a mano **non provati** |
 | Cancellazione dei codici su un veicolo reale | **Non provata** |
+| Conversazione MQTT reale fra il thread di lavoro (con la demo) e un broker di prova nello stesso processo (sette test): ultima volontà e credenziali nel CONNECT, stato in linea trattenuto, sensori numerici, istantanea con `null` per i valori assenti, diagnosi senza VIN, discovery, QoS 1, broker che cade e torna, chiusura con broker muto | Superato |
+| Pubblicazione MQTT verso un broker vero (Mosquitto o altro) e discovery riconosciuta da Home Assistant | **Non provate** |
 | Interfaccia in demo, con schermate: connessione, diagnosi, fermo immagine, grafici con buco del dato e marcatori, pagina Sensori (confronto e un grafico per sensore con dieci sensori), sessione riaperta | Superato |
 | Cruscotto in demo, con schermate: «Guida» in movimento, «Diagnosi P0420» con l'interruzione della sonda a valle, modo Modifica con ispettore, una pagina con i sette tipi (parametro non supportato, risposta mancante), layout stretto a 420 px, lettura avviata e fermata dal cruscotto | Superato; trascinamenti e ridimensionamenti col mouse **non provati** dal collaudo automatico |
 | Nuovi PID (contachilometri, pedale, coppia, consumo, pressioni…) su un veicolo reale | **Non provati**: formule da Wikipedia, verificate solo con test sui valori; quelle dei PID 49, 4A e 4C sono dedotte |
@@ -494,6 +505,7 @@ Struttura:
 | `obd/` | Decoder: trame e ISO-TP, PID, DTC, prontezza, Mode 06 |
 | `diagnosis.rs` | Lettura di DTC, MIL, prontezza, fermo immagine, Mode 06 |
 | `recording.rs` | Sessioni su disco e CSV |
+| `mqtt.rs` | Pubblicazione MQTT: argomenti, limitazione di frequenza, coda non bloccante, discovery |
 | `worker.rs` | Thread di lavoro con stati espliciti: scansione, connessione, diagnosi, cancellazione, polling, registrazione, disconnessione |
 | `ui/` | Interfaccia egui: non esegue mai I/O verso l'adattatore |
 | `ui/tema.rs` | Token visivi (colori, spaziature, raggi, caratteri) applicati a egui |

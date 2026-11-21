@@ -7,6 +7,7 @@
 //! - [`obd`]: decodifica delle risposte OBD-II;
 //! - [`diagnosis`]: lettura di DTC, prontezza, fermo immagine, Mode 06;
 //! - [`recording`]: sessioni su disco ed esportazione CSV;
+//! - [`mqtt`]: pubblicazione in tempo reale su un broker MQTT;
 //! - [`worker`]: thread di lavoro con stati espliciti;
 //! - [`ui`]: interfaccia egui.
 
@@ -14,6 +15,7 @@ pub mod config;
 pub mod diagnosis;
 pub mod elm;
 pub mod model;
+pub mod mqtt;
 pub mod obd;
 pub mod recording;
 pub mod summary;
