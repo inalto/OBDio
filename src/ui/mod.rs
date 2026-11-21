@@ -20,24 +20,26 @@ use crate::worker::{
 
 #[cfg(feature = "collaudo")]
 mod collaudo;
+mod cruscotto;
 pub mod dati;
 mod grafici;
 mod pagine;
 mod sensori;
+pub(crate) mod tema;
 
 use dati::Archivio;
 pub(crate) use sensori::VistaSensori;
 
-pub(crate) const ARANCIO_DEMO: Color32 = Color32::from_rgb(255, 152, 0);
-pub(crate) const ROSSO: Color32 = Color32::from_rgb(239, 83, 80);
-pub(crate) const VERDE: Color32 = Color32::from_rgb(102, 187, 106);
-pub(crate) const GIALLO: Color32 = Color32::from_rgb(255, 202, 40);
-pub(crate) const GRIGIO: Color32 = Color32::from_rgb(158, 158, 158);
+// Nomi storici dei colori, ora alias dei token di `tema` (unica fonte).
+pub(crate) use tema::{
+    ATTENZIONE as GIALLO, DEMO as ARANCIO_DEMO, OK as VERDE, PERICOLO as ROSSO, TESTO_2 as GRIGIO,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Scheda {
     Connessione,
     Diagnosi,
+    Cruscotto,
     Sensori,
     Sessioni,
 }
@@ -117,6 +119,9 @@ pub struct App {
     pub(crate) caricamento: Option<Receiver<Result<SessionData, String>>>,
     pub(crate) errore_sessione: Option<String>,
 
+    // Cruscotto
+    pub(crate) cruscotto: cruscotto::StatoCruscotto,
+
     #[cfg(feature = "collaudo")]
     collaudo: Option<collaudo::Collaudo>,
 }
@@ -135,18 +140,7 @@ pub fn esegui() -> eframe::Result {
 
 impl App {
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        cc.egui_ctx.set_theme(egui::Theme::Dark);
-        cc.egui_ctx.all_styles_mut(|s| {
-            s.spacing.item_spacing = egui::vec2(8.0, 6.0);
-            s.spacing.button_padding = egui::vec2(10.0, 5.0);
-            for (stile, font) in s.text_styles.iter_mut() {
-                font.size = match stile {
-                    egui::TextStyle::Heading => 19.0,
-                    egui::TextStyle::Small => 11.5,
-                    _ => 14.5,
-                };
-            }
-        });
+        tema::applica(&cc.egui_ctx);
         let cartella = recording::cartella_sessioni();
         let ctx = cc.egui_ctx.clone();
         let (tx, rx, lavoro) = worker::avvia(cartella.clone(), move || ctx.request_repaint());
@@ -190,6 +184,7 @@ impl App {
             aperta: None,
             caricamento: None,
             errore_sessione: None,
+            cruscotto: cruscotto::StatoCruscotto::carica(),
             #[cfg(feature = "collaudo")]
             collaudo: collaudo::Collaudo::da_ambiente(),
         }
@@ -211,6 +206,9 @@ impl App {
     /// Chiavi da interrogare secondo la selezione corrente e, fra queste,
     /// quelle prioritarie (le sonde del preset, se selezionate).
     pub(crate) fn chiavi_polling(&self) -> (Vec<String>, Vec<String>) {
+        if self.scheda == Scheda::Cruscotto {
+            return self.chiavi_polling_cruscotto();
+        }
         sensori::chiavi_da_selezione(&self.selezione, &self.preset)
     }
 
@@ -354,6 +352,7 @@ impl App {
             for (scheda, nome) in [
                 (Scheda::Connessione, "Connessione"),
                 (Scheda::Diagnosi, "Codici guasto e fermo immagine"),
+                (Scheda::Cruscotto, "Cruscotto"),
                 (Scheda::Sensori, "Sensori"),
                 (Scheda::Sessioni, "Sessioni salvate"),
             ] {
@@ -385,7 +384,7 @@ impl App {
                 .aperta
                 .as_ref()
                 .is_some_and(|s| s.dati.intestazione.demo),
-            Scheda::Sensori => {
+            Scheda::Sensori | Scheda::Cruscotto => {
                 self.info.as_ref().is_some_and(|i| i.demo)
                     || (self.live_demo && !self.live.serie.is_empty())
             }
@@ -459,10 +458,12 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         #[cfg(feature = "collaudo")]
         collaudo::passo(self, ui.ctx());
+        self.governa_polling_cruscotto();
         egui::Panel::top("barra").show(ui, |ui| self.barra_superiore(ui));
         egui::CentralPanel::default().show(ui, |ui| match self.scheda {
             Scheda::Connessione => self.pagina_connessione(ui),
             Scheda::Diagnosi => self.pagina_diagnosi(ui),
+            Scheda::Cruscotto => self.pagina_cruscotto(ui),
             Scheda::Sensori => self.pagina_sensori(ui),
             Scheda::Sessioni => self.pagina_sessioni(ui),
         });

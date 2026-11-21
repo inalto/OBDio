@@ -58,6 +58,12 @@ teal-300 `#5EEAD4`, orange-400 `#FB923C`, lime-400 `#A3E635`.
 I numeri degli strumenti usano cifre a larghezza fissa (font monospace di egui)
 perché il valore non «balli» mentre cambia.
 
+Nota di implementazione (fase 3): il testo dei controlli sotto il puntatore o
+premuti, e il testo «forte» di egui, è bianco puro, un gradino sopra `testo`;
+le caselle di spunta sono di 18 px perché con il raggio di 6 px una casella da
+14 px sembrerebbe un pulsante di opzione. In un riquadro troppo piccolo il
+valore di uno strumento può scendere sotto i 28 px per non uscire dal bordo.
+
 ## 2. Struttura e navigazione
 
 Sei destinazioni, sempre le stesse:
@@ -138,10 +144,17 @@ Ogni strumento mostra **un** parametro. Tipi:
   la maniglia nell'angolo lo ridimensiona, un tocco lo seleziona e apre
   l'**ispettore** (a destra su largo, dal basso su stretto).
 - Ogni gesto ha un'alternativa visibile: nell'ispettore posizione e misura si
-  possono cambiare con pulsanti e campi numerici.
+  possono cambiare con pulsanti e campi numerici. Sul layout stretto (4
+  colonne, ricomposte in modo deterministico da quelle a 12) i gesti di
+  spostamento sono disattivati: si tocca per selezionare e posizione e misura
+  si cambiano dall'ispettore, riferite alla griglia a 12 colonne che è
+  l'unica salvata.
 - Ispettore: parametro, tipo di strumento, titolo, unità mostrata, minimo e
   massimo della scala, soglia di attenzione e soglia critica (con verso:
-  sopra o sotto), decimali, marcatore di picco, durata per il tipo Grafico.
+  sopra, sotto o simmetrica attorno a zero, «fuori da ±», per le correzioni
+  carburante), decimali, marcatore di picco, durata per il tipo Grafico.
+  L'unità è quella del parametro e si mostra, non si cambia (le conversioni
+  di unità sono rinviate).
   I valori predefiniti derivano dal parametro scelto (per i giri: 0–8.000,
   rosso oltre 6.500), così uno strumento appena aggiunto è già sensato.
 - Lo strumento sovrapposto a un altro non si può rilasciare: il rettangolo di
@@ -149,10 +162,15 @@ Ogni strumento mostra **un** parametro. Tipi:
   d'origine.
 - *Annulla* riporta la pagina all'ultimo salvataggio: per questo aggiungere,
   spostare ed eliminare non chiedono conferma.
-- I cruscotti si **esportano e importano** come file JSON.
+- I cruscotti si **esportano e importano** come file JSON (una pagina o
+  l'intero insieme). Con Rust 1.93 la finestra di scelta file prevista
+  (`egui-file-dialog`) non compila: il percorso si scrive in un campo, con
+  l'elenco dei JSON della cartella.
 - Modelli pronti: «Guida» (giri, velocità, temperatura, carico,
   contachilometri), «Motore» (pressione collettore, anticipo, temperature,
-  tensione), «Diagnosi P0420» (sonde, correzioni, giri).
+  tensione), «Diagnosi P0420» (sonde, correzioni, giri). Le sonde sono
+  sorgenti risolte alla connessione (lambda o tensione, come la selezione
+  «Diagnosi P0420»), con la scala presa dal segnale effettivo.
 - Il cruscotto interroga da solo i parametri usati dagli strumenti della
   pagina visibile.
 

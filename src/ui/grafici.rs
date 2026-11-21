@@ -4,13 +4,15 @@ use eframe::egui::{self, Color32, Stroke};
 use egui_plot::{Legend, Line, LineStyle, Plot, PlotPoints, Span, VLine};
 
 use super::dati::Archivio;
+use super::tema;
 use crate::obd::pids;
 
-const BLU: Color32 = Color32::from_rgb(79, 195, 247);
-const ARANCIO: Color32 = Color32::from_rgb(255, 167, 38);
-const VERDE: Color32 = Color32::from_rgb(129, 199, 132);
-const ROSA: Color32 = Color32::from_rgb(240, 98, 146);
-const VIOLA: Color32 = Color32::from_rgb(186, 104, 200);
+// Serie nell'ordine dei token di design (docs/DESIGN.md, sezione 1).
+const BLU: Color32 = tema::SERIE[0];
+const ARANCIO: Color32 = tema::SERIE[1];
+const VERDE: Color32 = tema::SERIE[2];
+const ROSA: Color32 = tema::SERIE[3];
+const VIOLA: Color32 = tema::SERIE[4];
 const BUCO: Color32 = Color32::from_rgba_premultiplied(120, 20, 20, 70);
 const MARCATORE: Color32 = Color32::from_rgb(255, 238, 88);
 

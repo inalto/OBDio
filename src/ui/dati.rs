@@ -1,6 +1,7 @@
 //! Serie temporali mostrate nei grafici, dal vivo o da una sessione riaperta.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Instant;
 
 use crate::model::{Marker, Sample, Stato};
 use crate::recording::SessionData;
@@ -20,6 +21,12 @@ pub struct Serie {
     pub punti: Vec<Punto>,
     /// Statistiche correnti dei soli valori validi (mai influenzate dai buchi).
     pub stat: Statistiche,
+    /// Picchi per il cruscotto: come `stat`, ma si azzerano a parte
+    /// («Azzera picchi») senza toccare minimo e massimo della pagina Sensori.
+    pub picchi: Statistiche,
+    /// Istante (orologio del PC) in cui è arrivato l'ultimo campione: serve a
+    /// riconoscere un dato vecchio anche quando il flusso si ferma.
+    pub arrivo: Option<Instant>,
 }
 
 /// Minimo, massimo e media corrente di una serie; tutti assenti finché non
@@ -86,7 +93,9 @@ impl Archivio {
         });
         if let Some(v) = c.valore {
             s.stat.aggiungi(v);
+            s.picchi.aggiungi(v);
         }
+        s.arrivo = Some(Instant::now());
         if s.punti.len() > MAX_PUNTI {
             s.punti.drain(..MAX_PUNTI / 4);
         }
@@ -98,6 +107,19 @@ impl Archivio {
         for s in self.serie.values_mut() {
             s.stat = Statistiche::default();
         }
+    }
+
+    /// Riparte da zero con i picchi del cruscotto.
+    pub fn azzera_picchi(&mut self) {
+        for s in self.serie.values_mut() {
+            s.picchi = Statistiche::default();
+        }
+    }
+
+    /// Secondi trascorsi (orologio del PC) dall'arrivo dell'ultimo campione.
+    pub fn eta_ultimo(&self, key: &str) -> Option<f64> {
+        let arrivo = self.serie.get(key)?.arrivo?;
+        Some(arrivo.elapsed().as_secs_f64())
     }
 
     pub fn da_sessione(s: &SessionData) -> Self {
@@ -259,6 +281,29 @@ mod tests {
         a.aggiungi(&c(2.0, "giri", "7E8", Some(5.0)));
         assert_eq!(a.serie["giri"].stat.min, Some(5.0));
         assert_eq!(a.serie["giri"].stat.media(), Some(5.0));
+    }
+
+    #[test]
+    fn picchi_separati_dalle_statistiche() {
+        let mut a = Archivio::default();
+        assert_eq!(a.eta_ultimo("giri"), None);
+        a.aggiungi(&c(0.0, "giri", "7E8", Some(3000.0)));
+        a.aggiungi(&c(0.5, "giri", "7E8", Some(1000.0)));
+        a.aggiungi(&c(1.0, "giri", "", None));
+        assert_eq!(a.serie["giri"].picchi.max, Some(3000.0));
+        assert!(
+            a.eta_ultimo("giri")
+                .is_some_and(|e| (0.0..5.0).contains(&e))
+        );
+        a.azzera_picchi();
+        assert_eq!(a.serie["giri"].picchi.max, None);
+        // Minimo e massimo della pagina Sensori restano.
+        assert_eq!(a.serie["giri"].stat.max, Some(3000.0));
+        a.aggiungi(&c(1.5, "giri", "7E8", Some(1200.0)));
+        assert_eq!(a.serie["giri"].picchi.max, Some(1200.0));
+        // Azzerare le statistiche non tocca i picchi.
+        a.azzera_statistiche();
+        assert_eq!(a.serie["giri"].picchi.max, Some(1200.0));
     }
 
     #[test]

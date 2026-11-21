@@ -18,7 +18,7 @@ la specifica di design in [DESIGN.md](DESIGN.md).
 | Cancellazione codici | Azione separata dai comandi di lettura, con conferma e copia di sicurezza | È l'unica operazione che modifica la centralina e non si annulla |
 | Configurazione | File JSON in una cartella `configurazione` | La persistenza di eframe è disattivata su Android; i JSON servono anche per importare ed esportare |
 | MQTT | `rumqttc` 0.25, senza TLS nella prima versione | Rust puro, usabile da un thread normale, riconnessione automatica |
-| Finestre di scelta file | `egui-file-dialog` 0.14 | `rfd` non supporta Android; questa è disegnata dentro egui |
+| Finestre di scelta file | `egui-file-dialog` 0.14 (rinviata) | `rfd` non supporta Android; questa è disegnata dentro egui. Ma la 0.14 dipende da `sysinfo` 0.39, che richiede Rust 1.95: con Rust 1.93 l'importazione e l'esportazione dei cruscotti chiedono il percorso in un campo di testo, con l'elenco dei JSON della cartella |
 | Riproduzione | I campioni registrati rientrano dallo stesso canale degli eventi dal vivo | Cruscotto, grafici e MQTT funzionano senza distinguere la sorgente |
 
 ## Fasi
@@ -31,7 +31,7 @@ superati, il collaudo automatico dell'interfaccia in demo e un commit.
 | 0 | Ricerca, specifica di design, questo piano | Sonnet (ricerca) | fatto |
 | 1 | Database DTC completo; cancellazione codici con conferma e copia di sicurezza; simulatore aggiornato | Opus (cancellazione), Sonnet (database) | |
 | 2 | Catalogo PID esteso (contachilometri, pedale, coppia, consumo…); pagina **Sensori** con tutti i parametri supportati, ricerca, min/medio/max, un grafico per sensore; grandezze calcolate (distanza parziale) | Sonnet | fatto |
-| 3 | **Cruscotto** personalizzabile: tema e token, sette tipi di strumento, griglia, modo modifica, ispettore, pagine, modelli pronti, salvataggio, import/export dei cruscotti | Opus | |
+| 3 | **Cruscotto** personalizzabile: tema e token, sette tipi di strumento, griglia, modo modifica, ispettore, pagine, modelli pronti, salvataggio, import/export dei cruscotti | Opus | fatto |
 | 4 | Importazione ed esportazione dei dati (sessione, CSV OBDio, CSV in formato Torque, diagnosi JSON) e **riproduzione** in tempo reale con pausa, posizione e velocità | Opus | |
 | 5 | Pubblicazione **MQTT** in tempo reale: impostazioni, stato in linea/non in linea, un argomento per sensore più uno JSON cumulativo, discovery per Home Assistant | Sonnet | |
 | 6 | Rifinitura: navigazione a sei destinazioni, layout stretto per telefono, barra di stato, pagina Impostazioni | Opus | |
@@ -67,6 +67,13 @@ superati, il collaudo automatico dell'interfaccia in demo e un commit.
 Vedi DESIGN.md, sezioni 3 e 4. Punti di verifica: nessuno strumento mostra
 zero quando il dato manca; un cruscotto salvato si riapre identico; un file
 esportato si reimporta; la griglia si ricompone da 12 a 4 colonne.
+
+Fatto: `src/ui/tema.rs` (token applicati a tutta l'app), `src/ui/cruscotto/`
+(modello, sorgenti, strumenti, editor), lettura automatica dei parametri della
+pagina visibile, collaudo con schermate in `docs/schermate/cruscotto_*.png`.
+Il layout stretto esiste già nella pagina ma la finestra resta larga almeno
+980 px fino alla fase 6; trascinamenti e ridimensionamenti col mouse non sono
+coperti dal collaudo automatico.
 
 ### Fase 4 — Importare, esportare, rivivere
 

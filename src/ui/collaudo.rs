@@ -9,10 +9,68 @@ use std::time::Instant;
 
 use eframe::egui;
 
+use super::cruscotto::modello::{Cella, Pagina, SPIA_MIL, Soglia, Strumento, TipoStrumento};
 use super::{App, Scheda, VistaSensori};
 use crate::elm::ConfermaCancellazione;
 use crate::obd::pids;
+use crate::transport::demo::DemoTransport;
 use crate::worker::{Comando, Sorgente};
+
+/// Fase iniziale del simulatore per il cruscotto: la velocità del ciclo demo
+/// è zero nei primi 45 s e sale a 69 km/h fra 45 e 48 s; partendo da 40 s il
+/// grafico della velocità mostra la salita.
+const FASE_CRUSCOTTO_S: f64 = 40.0;
+
+/// Pagina di prova con uno strumento per tipo, più uno su un parametro non
+/// supportato dal simulatore e uno sulla sonda a valle (che ogni minuto
+/// smette di rispondere per 2,5 s).
+/// Parametro, tipo e (colonna, riga, larghezza, altezza).
+type Voce = (&'static str, TipoStrumento, (u32, u32, u32, u32));
+
+fn pagina_prova(primo_id: u64) -> Pagina {
+    use TipoStrumento::*;
+    let voci: [Voce; 11] = [
+        ("giri", Quadrante, (0, 0, 3, 3)),
+        ("temp_refrigerante", Arco, (3, 0, 3, 2)),
+        ("velocita", Numerico, (6, 0, 3, 2)),
+        ("contachilometri", Contachilometri, (9, 0, 3, 1)),
+        (SPIA_MIL, Spia, (9, 1, 3, 1)),
+        ("stft_b1", Barra, (3, 2, 3, 1)),
+        ("o2s2_tensione", Grafico, (6, 2, 5, 2)),
+        ("carico", Barra, (11, 2, 1, 3)),
+        ("temp_olio", Numerico, (0, 3, 3, 2)),
+        ("o2s2_tensione", Quadrante, (3, 3, 3, 3)),
+        ("giri", Spia, (6, 4, 5, 1)),
+    ];
+    let strumenti = voci
+        .iter()
+        .enumerate()
+        .map(|(i, (k, t, c))| {
+            let mut s = Strumento::predefinito(k, *t);
+            s.id = primo_id + i as u64;
+            s.imposta_cella(Cella::new(c.0, c.1, c.2, c.3));
+            if *t == Spia && *k == "giri" {
+                s.titolo = Some("Giri oltre 2.000".into());
+                s.soglia_attenzione = Some(Soglia::sopra(2000.0));
+                s.soglia_critica = None;
+            }
+            if *t == Grafico {
+                s.secondi = 30.0;
+            }
+            s
+        })
+        .collect();
+    Pagina {
+        nome: "Prova strumenti".into(),
+        strumenti,
+    }
+}
+
+fn sonda_a_valle_muta(app: &App) -> bool {
+    app.live
+        .ultimo("o2s2_tensione")
+        .is_some_and(|p| p.v.is_none())
+}
 
 pub struct Collaudo {
     cartella: PathBuf,
@@ -187,7 +245,108 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             app.invia(Comando::Scollega);
             c.avanti();
         }
+        // Cruscotto: nuovo collegamento demo a metà ciclo (velocità > 0).
         25 if !app.collegato() && c.secondi() > 0.5 => {
+            app.invia(Comando::Collega(Sorgente::Trasporto(Box::new(
+                DemoTransport::new().con_fase(FASE_CRUSCOTTO_S),
+            ))));
+            c.avanti();
+        }
+        26 if app.pronto() => {
+            app.invia(Comando::LeggiDiagnosi);
+            c.avanti();
+        }
+        // Aprendo il cruscotto la lettura parte da sola.
+        27 if app.diagnosi.is_some() && app.pronto() => {
+            app.cruscotto.pagina = 0;
+            app.scheda = Scheda::Cruscotto;
+            c.avanti();
+        }
+        28 if app.polling
+            && app.live.t_max > 22.0
+            && app
+                .live
+                .ultimo("velocita")
+                .and_then(|p| p.v)
+                .is_some_and(|v| v > 30.0) =>
+        {
+            scatta(&mut c, "9_cruscotto_guida")
+        }
+        29 => {
+            app.cruscotto.pagina = 2;
+            c.avanti();
+        }
+        30 if c.secondi() > 7.0 => scatta(&mut c, "10_cruscotto_p0420"),
+        31 => {
+            app.cruscotto.pagina = 0;
+            app.cruscotto.modifica = true;
+            app.cruscotto.selezionato = app.cruscotto.correnti.pagine[0]
+                .strumenti
+                .iter()
+                .find(|s| s.chiave == "velocita" && s.tipo == TipoStrumento::Quadrante)
+                .map(|s| s.id);
+            // Una modifica non salvata, per mostrarne l'indicazione.
+            if let Some(s) = app.cruscotto.correnti.pagine[0]
+                .strumenti
+                .iter_mut()
+                .find(|s| s.chiave == "velocita" && s.tipo == TipoStrumento::Quadrante)
+            {
+                s.mostra_picco = true;
+                s.titolo = Some("Velocità del veicolo".into());
+            }
+            c.avanti();
+        }
+        32 if c.secondi() > 1.0 => scatta(&mut c, "11_cruscotto_modifica"),
+        33 => {
+            app.cruscotto.annulla();
+            let id = app.cruscotto.correnti.nuovo_id();
+            app.cruscotto.correnti.pagine.push(pagina_prova(id));
+            app.cruscotto.pagina = app.cruscotto.correnti.pagine.len() - 1;
+            c.avanti();
+        }
+        // Attende che la sonda a valle smetta di rispondere (stato mancante).
+        34 if c.secondi() > 2.0 && sonda_a_valle_muta(app) => c.avanti(),
+        35 if c.secondi() > 0.9 => scatta(&mut c, "12_cruscotto_strumenti"),
+        // Layout stretto: finestra da telefono.
+        36 => {
+            app.cruscotto.pagina = 0;
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(
+                360.0, 560.0,
+            )));
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(420.0, 820.0)));
+            c.avanti();
+        }
+        37 if c.secondi() > 2.0 => scatta(&mut c, "13_cruscotto_stretto"),
+        38 => {
+            app.cruscotto.modifica = true;
+            app.cruscotto.selezionato = app.cruscotto.correnti.pagine[0]
+                .strumenti
+                .first()
+                .map(|s| s.id);
+            c.avanti();
+        }
+        39 if c.secondi() > 1.0 => scatta(&mut c, "14_cruscotto_stretto_modifica"),
+        40 => {
+            app.cruscotto.annulla();
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1280.0, 820.0)));
+            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(
+                980.0, 620.0,
+            )));
+            // Lasciando il cruscotto la lettura avviata da lui si ferma.
+            app.scheda = Scheda::Sensori;
+            c.avanti();
+        }
+        41 if c.secondi() > 1.5 => {
+            if app.polling {
+                eprintln!("collaudo: la lettura avviata dal cruscotto non si è fermata");
+            }
+            scatta(&mut c, "15_dopo_il_cruscotto")
+        }
+        42 => {
+            app.invia(Comando::Scollega);
+            c.avanti();
+        }
+        43 if !app.collegato() && c.secondi() > 0.5 => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             c.avanti();
         }

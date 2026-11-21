@@ -138,6 +138,97 @@ nulla. È una stima, più precisa con una lettura frequente della velocità;
 selezionarla fa leggere la velocità in automatico. Il valore viene registrato
 come ogni altro sensore (chiave `distanza_parziale`, in km).
 
+## Cruscotto
+
+La scheda **Cruscotto** mostra pagine di strumenti disegnati dall'app, uno per
+parametro, leggibili da un metro. Al primo avvio ci sono tre pagine pronte:
+
+- **Guida**: giri, velocità, temperatura del refrigerante, carico,
+  contachilometri (o distanza parziale) e l'andamento della velocità;
+- **Motore**: pressione del collettore, anticipo, temperature di
+  refrigerante, aria e olio, tensione del modulo, farfalla;
+- **Diagnosi P0420**: sonda a monte e a valle (grafico e valore), STFT, LTFT,
+  giri, spia MIL e registrazione. Le sonde si scelgono da sole fra lambda e
+  tensione secondo quello che la centralina espone.
+
+![Cruscotto «Guida» in demo](docs/schermate/cruscotto_guida.png)
+
+![Cruscotto «Diagnosi P0420» con l'interruzione della sonda a valle](docs/schermate/cruscotto_p0420.png)
+
+Aprendo il cruscotto da collegati, la **lettura parte da sola** con i
+parametri della pagina visibile (più quelli spuntati in Sensori). Tornando a
+un'altra scheda si torna alla selezione di Sensori; se la lettura era partita
+solo per il cruscotto e non si sta registrando, si ferma.
+
+### Tipi di strumento
+
+| Tipo | Che cosa mostra |
+|---|---|
+| Quadrante | Scala a 270° con tacche «tonde», lancetta smorzata, valore grande, zone di attenzione e critiche, marcatore di picco |
+| Arco | Come il quadrante ma a 180°, per riquadri bassi |
+| Barra | Orizzontale o verticale secondo la forma; con zero al centro per i valori con segno (correzioni carburante) |
+| Numerico | Valore grande con unità, minimo e massimo dalla connessione |
+| Grafico | Gli ultimi N secondi dello stesso parametro; i tratti senza dato sono interrotti e segnati in rosso |
+| Contachilometri | Cifre «a rulli»: il contachilometri della centralina (PID A6) se lo espone, altrimenti la distanza parziale calcolata, indicata da «Parziale» |
+| Spia | Accesa o spenta, sempre con il testo: MIL dell'ultima diagnosi, registrazione in corso, o soglia superata da un parametro |
+
+Un dato assente non diventa mai zero: lo strumento mostra «—» senza lancetta e
+scrive il motivo. *In attesa del dato* prima del primo campione; *fermo da N s*
+(valore e lancetta in grigio) se non arrivano campioni da più di 3 secondi; *La
+centralina non risponde* o *Errore di comunicazione* se l'ultima lettura è
+fallita; *Non supportato da questa centralina* (strumento attenuato) se la
+centralina non dichiara il parametro. Quando il valore supera una soglia, il
+numero e l'arco prendono il colore della zona (ambra o rosso). **Azzera
+picchi** riparte da zero con i marcatori di picco senza toccare minimo e
+massimo della pagina Sensori.
+
+![Uno strumento per tipo, con un parametro non supportato e uno senza risposta](docs/schermate/cruscotto_strumenti.png)
+
+### Personalizzare
+
+Il pulsante **Modifica** apre il modo di modifica: compaiono la griglia
+punteggiata (12 colonne) e la barra *Modifica del cruscotto* con **Aggiungi
+strumento**, **Salva** e **Annulla**.
+
+- Trascinare uno strumento lo sposta (aggancio alla griglia); la maniglia
+  nell'angolo in basso a destra lo ridimensiona. Se il posto è occupato il
+  rettangolo diventa rosso e al rilascio lo strumento torna dov'era.
+- Un clic seleziona lo strumento e apre l'**ispettore** a destra: parametro
+  (con ricerca, prima quelli supportati), tipo, titolo, minimo e massimo,
+  soglia di attenzione e critica con il verso (*sopra*, *sotto* o *fuori da
+  ±*, simmetrica attorno a zero), decimali, marcatore di picco, durata del
+  grafico, posizione e misura con pulsanti «−»/«+». Scegliendo un parametro,
+  scala e soglie prendono valori sensati (giri 0–8.000 con zona rossa oltre
+  6.500; temperatura 40–130 °C; correzioni ±25 % con soglie ±10 e ±20;
+  tensione 10–16 V con allarme sotto 12 e 11 V; pressione del collettore
+  0–255 kPa, da restringere a 0–105 per un motore aspirato).
+  **Ripristina predefiniti**, **Duplica** ed **Elimina** sono in fondo.
+- Nella riga delle schede: **Nuova pagina**, **Rinomina**, **Elimina pagina**.
+- **Annulla** riporta tutto all'ultimo salvataggio: per questo aggiungere,
+  spostare ed eliminare non chiedono conferma. Le modifiche non salvate sono
+  segnalate e restano in memoria anche cambiando scheda.
+
+![Modo Modifica con l'ispettore aperto](docs/schermate/cruscotto_modifica.png)
+
+Sotto i 900 px di larghezza la pagina usa 4 colonne (gli strumenti si
+ricompongono in ordine di lettura, in proporzione) e l'ispettore sale dal
+basso; in questo layout posizione e misura si cambiano dall'ispettore e si
+riferiscono alla griglia a 12 colonne.
+
+### Importare ed esportare
+
+Dal menu **Importa / esporta** si salva in JSON la pagina visibile o l'intero
+insieme, e si importa un file esportato (una pagina o tutto): le pagine
+importate si aggiungono alle esistenti e restano da salvare. Un file non
+valido viene rifiutato con il motivo, senza cambiare nulla. La finestra
+chiede il percorso del file e propone l'elenco dei JSON della cartella.
+
+I cruscotti stanno in `configurazione\cruscotti.json` accanto
+all'eseguibile (oppure in `Documenti\OBDio\configurazione` se quella cartella
+non è scrivibile). Il file è leggibile e tollerante: campi e tipi sconosciuti
+non ne impediscono il caricamento; se è illeggibile viene conservato come
+`cruscotti.non_valido.json` e si ripartono dai modelli pronti.
+
 ## Acquisire una sessione P0420
 
 1. Collega l'adattatore; in **Connessione** controlla protocollo e centralina
@@ -310,6 +401,7 @@ non è verificabile: è un'ipotesi, non un dato.
 | Finestra di conferma ed esito della cancellazione nell'interfaccia, in demo | Schermate dal collaudo automatico; clic, Esc e Invio a mano **non provati** |
 | Cancellazione dei codici su un veicolo reale | **Non provata** |
 | Interfaccia in demo, con schermate: connessione, diagnosi, fermo immagine, grafici con buco del dato e marcatori, pagina Sensori (confronto e un grafico per sensore con dieci sensori), sessione riaperta | Superato |
+| Cruscotto in demo, con schermate: «Guida» in movimento, «Diagnosi P0420» con l'interruzione della sonda a valle, modo Modifica con ispettore, una pagina con i sette tipi (parametro non supportato, risposta mancante), layout stretto a 420 px, lettura avviata e fermata dal cruscotto | Superato; trascinamenti e ridimensionamenti col mouse **non provati** dal collaudo automatico |
 | Nuovi PID (contachilometri, pedale, coppia, consumo, pressioni…) su un veicolo reale | **Non provati**: formule da Wikipedia, verificate solo con test sui valori; quelle dei PID 49, 4A e 4C sono dedotte |
 | Scansione BLE reale su un PC Windows 11 | Funziona (dispositivi elencati); nessun Carista presente |
 | Connessione BLE a un adattatore reale | **Non provata** |
@@ -404,6 +496,8 @@ Struttura:
 | `recording.rs` | Sessioni su disco e CSV |
 | `worker.rs` | Thread di lavoro con stati espliciti: scansione, connessione, diagnosi, cancellazione, polling, registrazione, disconnessione |
 | `ui/` | Interfaccia egui: non esegue mai I/O verso l'adattatore |
+| `ui/tema.rs` | Token visivi (colori, spaziature, raggi, caratteri) applicati a egui |
+| `ui/cruscotto/` | Cruscotto: modello e griglia, sorgenti dei dati, disegno degli strumenti, modo Modifica |
 
 Strumenti di sviluppo:
 
