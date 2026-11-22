@@ -59,6 +59,8 @@ pub(crate) struct Registrazione {
 }
 
 pub(crate) struct UltimaSessione {
+    // Letto solo dal collaudo automatico.
+    #[cfg_attr(not(feature = "collaudo"), allow(dead_code))]
     pub percorso: PathBuf,
     pub csv: Option<PathBuf>,
     pub campioni: usize,

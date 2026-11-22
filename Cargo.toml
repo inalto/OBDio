@@ -1,6 +1,6 @@
 [package]
 name = "obdio"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.93"
 description = "Lettore diagnostico OBD-II/EOBD per adattatori ELM327 (Carista) su Windows; in lettura, salvo la cancellazione confermata dei codici guasto"
@@ -8,6 +8,12 @@ publish = false
 
 [lib]
 crate-type = ["cdylib", "lib"]
+
+# Nome diverso dalla libreria: su Windows i due file di simboli (.pdb)
+# avrebbero altrimenti lo stesso nome. Il pacchetto lo rinomina OBDio.exe.
+[[bin]]
+name = "obdio-desktop"
+path = "src/main.rs"
 
 [dependencies]
 eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts"] }

@@ -11,13 +11,30 @@ esplicitamente: vedi [Cancellare i codici guasto](#cancellare-i-codici-guasto).
 Non scrive sulle centraline, non esegue codifiche né test attuatori e non
 permette di inviare comandi liberi.
 
-Versione 0.1.0. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
-con codice P0420.
+Versione 0.2.0. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
+con codice P0420. Le novità rispetto alla prima versione, fase per fase, sono
+in [docs/NOVITA.md](docs/NOVITA.md).
 
 > **Stato delle verifiche.** Tutto il flusso è stato verificato in modalità
 > demo e con test automatici. **Non è ancora stato provato su un adattatore
-> Carista né sull'auto**: vedi [Stato delle verifiche](#stato-delle-verifiche)
-> e [Controlli da fare sull'auto](#controlli-da-fare-sullauto).
+> Carista né sull'auto, né con un broker MQTT o Home Assistant reali, né con un
+> registro Torque reale, né su un telefono**: vedi
+> [Stato delle verifiche](#stato-delle-verifiche) e
+> [Controlli da fare sull'auto](#controlli-da-fare-sullauto).
+
+## Indice
+
+- [Avvio](#avvio), [Navigazione](#navigazione), [Provare la demo](#provare-la-demo)
+- [Collegare l'adattatore](#collegare-ladattatore)
+- [Pagina Sensori](#pagina-sensori), [Cruscotto](#cruscotto)
+- [Acquisire una sessione P0420](#acquisire-una-sessione-p0420)
+- [Recuperare il CSV e riaprire le sessioni](#recuperare-il-csv-e-riaprire-le-sessioni)
+- [Importare ed esportare le sessioni](#importare-ed-esportare-le-sessioni)
+- [Rivivere una sessione (riproduzione)](#rivivere-una-sessione-riproduzione)
+- [Cosa mostra la diagnosi](#cosa-mostra-la-diagnosi), [Cancellare i codici guasto](#cancellare-i-codici-guasto)
+- [MQTT](#mqtt), [Android](#android)
+- [Stato delle verifiche](#stato-delle-verifiche), [Controlli da fare sull'auto](#controlli-da-fare-sullauto)
+- [Limiti noti](#limiti-noti), [Comandi inviati](#comandi-inviati), [Compilare dai sorgenti](#compilare-dai-sorgenti)
 
 ## Avvio
 
@@ -264,7 +281,7 @@ ricompongono in ordine di lettura, in proporzione) e l'ispettore sale dal
 basso; in questo layout posizione e misura si cambiano dall'ispettore e si
 riferiscono alla griglia a 12 colonne.
 
-### Importare ed esportare
+### Importare ed esportare i cruscotti
 
 Dal menu **Importa / esporta** si salva in JSON la pagina visibile o l'intero
 insieme, e si importa un file esportato (una pagina o tutto): le pagine
@@ -541,7 +558,7 @@ non è verificabile: è un'ipotesi, non un dato.
 
 | Verifica | Esito |
 |---|---|
-| Test automatici (184): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
+| Test automatici (188: 168 unitari e 20 di integrazione in `tests/`): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
 | Flusso demo attraverso il thread di lavoro reale: collegamento, P0420, fermo immagine, polling con priorità alle sonde, registrazione, CSV, riapertura | Superato |
 | Distanza parziale attraverso il thread di lavoro reale: campioni monotoni in km, registrati nella sessione e nel CSV | Superato |
 | Cancellazione dei codici in demo attraverso il thread di lavoro reale: copia della diagnosi, servizio 04, rilettura con P0420 solo permanente, MIL spenta, prontezza azzerata | Superato |
@@ -597,8 +614,9 @@ non è verificabile: è un'ipotesi, non un dato.
 - Sui protocolli non CAN (J1850, ISO 9141-2, KWP2000) sono letti DTC,
   prontezza, fermo immagine e dati dal vivo; Mode 06 e VIN no. Questi
   protocolli sono coperti solo da test sul formato delle trame.
-- Le descrizioni dei DTC coprono i codici generici più comuni; per gli altri
-  viene mostrato il solo codice.
+- Le descrizioni dei DTC coprono i 9.533 codici generici (P0, P2, P3, B0, C0,
+  U0, U3), in inglese, con circa 55 descrizioni in italiano curate a mano. I
+  codici del costruttore (per esempio P1xxx) mostrano solo il codice.
 - Il PID 4F (fondi scala dichiarati dalla centralina) viene segnalato ma non
   applicato alle formule.
 - Viene letto il solo fotogramma 0 del fermo immagine.
@@ -625,6 +643,13 @@ servizi, `04` compreso.
 
 Mai inviati: `08`, servizi UDS di scrittura, codifica o comando attuatori,
 comandi liberi.
+
+## Android
+
+Il codice è predisposto per Android (Fase 7 del piano), ma **non è stato
+compilato né provato**: non esiste un APK, non c'è un NDK su questa macchina e
+nulla è stato installato su un telefono. Il percorso di compilazione e le
+prove da fare per primo sono in [docs/ANDROID.md](docs/ANDROID.md).
 
 ## Compilare dai sorgenti
 

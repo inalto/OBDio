@@ -35,7 +35,7 @@ superati, il collaudo automatico dell'interfaccia in demo e un commit.
 | 4 | Importazione ed esportazione dei dati (sessione, CSV OBDio, CSV in formato Torque, diagnosi JSON) e **riproduzione** in tempo reale con pausa, posizione e velocità | Opus | fatto |
 | 5 | Pubblicazione **MQTT** in tempo reale: impostazioni, stato in linea/non in linea, un argomento per sensore più uno JSON cumulativo, discovery per Home Assistant | Sonnet | fatto |
 | 6 | Rifinitura: navigazione a sei destinazioni, layout stretto per telefono, barra di stato, pagina Impostazioni | Opus | fatto |
-| 7 | Base Android (libreria `cdylib`, funzioni desktop dietro `cfg`), guida alla compilazione, README, pacchetto Windows | Haiku (documenti), Sonnet (codice) | |
+| 7 | Base Android (libreria `cdylib`, funzioni desktop dietro `cfg`), guida alla compilazione, README, pacchetto Windows | Haiku (documenti), Sonnet (codice) | fatto |
 
 ### Fase 1 — Codici: descrizioni e cancellazione
 
@@ -130,6 +130,10 @@ finestre di sistema solo su desktop) e si documenta il percorso di
 compilazione. **Non** si consegna un APK: richiede SDK e NDK Android, una
 parte Java per il Bluetooth e prove su un telefono.
 
+Il codice di questa fase è integrato (merge fatto), ma l'APK non è stato
+costruito e il codice Android non è mai stato compilato: vedi
+[ANDROID.md](ANDROID.md).
+
 ## Cosa resta fuori
 
 - Codici e parametri specifici del costruttore (richiedono dati non aperti).
@@ -137,3 +141,20 @@ parte Java per il Bluetooth e prove su un telefono.
 - TLS per MQTT (rinviato: la scelta della libreria crittografica condiziona
   la compilazione per Android).
 - Mappa e GPS, cronometro di accelerazione, plugin.
+
+## Stato
+
+Tutte le fasi del piano sono fatte nel codice. Restano non verificati:
+
+- l'adattatore Carista reale (BLE, seriale/SPP) e la lettura di una centralina
+  reale;
+- il veicolo reale: nessuna lettura, né la cancellazione dei codici;
+- un broker MQTT reale (per esempio Mosquitto) e Home Assistant;
+- un registro prodotto dall'app Torque (solo file scritti da OBDio o a mano);
+- un telefono reale: tocco, gesti col dito, tastiera a schermo;
+- il trascinamento e il ridimensionamento degli strumenti col mouse
+  nell'editor del cruscotto;
+- Android: codice non compilato, nessun NDK, nessun APK (vedi
+  [ANDROID.md](ANDROID.md)).
+
+Test automatici: 188 (168 unitari e 20 di integrazione).
