@@ -29,7 +29,7 @@ superati, il collaudo automatico dell'interfaccia in demo e un commit.
 | Fase | Contenuto | Modello | Stato |
 |---|---|---|---|
 | 0 | Ricerca, specifica di design, questo piano | Sonnet (ricerca) | fatto |
-| 1 | Database DTC completo; cancellazione codici con conferma e copia di sicurezza; simulatore aggiornato | Opus (cancellazione), Sonnet (database) | |
+| 1 | Database DTC completo; cancellazione codici con conferma e copia di sicurezza; simulatore aggiornato | Opus (cancellazione), Sonnet (database) | fatto |
 | 2 | Catalogo PID esteso (contachilometri, pedale, coppia, consumo…); pagina **Sensori** con tutti i parametri supportati, ricerca, min/medio/max, un grafico per sensore; grandezze calcolate (distanza parziale) | Sonnet | fatto |
 | 3 | **Cruscotto** personalizzabile: tema e token, sette tipi di strumento, griglia, modo modifica, ispettore, pagine, modelli pronti, salvataggio, import/export dei cruscotti | Opus | fatto |
 | 4 | Importazione ed esportazione dei dati (sessione, CSV OBDio, CSV in formato Torque, diagnosi JSON) e **riproduzione** in tempo reale con pausa, posizione e velocità | Opus | fatto |
