@@ -132,6 +132,32 @@ fn titolo_inglese(codice: &str) -> Option<&'static str> {
         .map(|i| e[i].1)
 }
 
+/// Traduzione italiana degli stessi titoli (`CODICE<TAB>titolo italiano`).
+/// È una traduzione automatica eseguita con un modello linguistico e un
+/// glossario di officina, non rivista da un tecnico: per questo il titolo
+/// inglese originale resta sempre disponibile accanto.
+const DATI_ITALIANI: &str = include_str!("../../data/dtc_generici_it.tsv");
+
+fn elenco_italiano() -> &'static [(&'static str, &'static str)] {
+    static ELENCO: OnceLock<Vec<(&'static str, &'static str)>> = OnceLock::new();
+    ELENCO.get_or_init(|| {
+        let mut v: Vec<(&'static str, &'static str)> = DATI_ITALIANI
+            .lines()
+            .filter_map(|riga| riga.split_once('\t'))
+            .collect();
+        v.sort_unstable_by_key(|(codice, _)| *codice);
+        v
+    })
+}
+
+/// Titolo italiano tradotto automaticamente, se presente.
+fn titolo_italiano(codice: &str) -> Option<&'static str> {
+    let e = elenco_italiano();
+    e.binary_search_by(|(c, _)| (*c).cmp(codice))
+        .ok()
+        .map(|i| e[i].1)
+}
+
 /// Numero di codici presenti nell'elenco incorporato.
 pub fn numero_codici() -> usize {
     elenco().len()
@@ -174,24 +200,42 @@ pub struct DescrizioneDtc {
     pub lingua: Option<LinguaDescrizione>,
     /// `true` se il codice è generico (non specifico del costruttore).
     pub generico: bool,
+    /// Titolo inglese originale dell'elenco, quando esiste.
+    pub originale: Option<&'static str>,
+    /// `true` se il testo italiano è una traduzione automatica non rivista.
+    pub traduzione_automatica: bool,
 }
 
-/// Descrizione di un codice: italiana se curata, altrimenti il titolo inglese
-/// dell'elenco, altrimenti una nota.
+/// Descrizione di un codice: italiana curata se esiste, altrimenti la
+/// traduzione automatica, altrimenti il titolo inglese, altrimenti una nota.
 pub fn descrivi(codice: &str) -> DescrizioneDtc {
     let generico = e_generico(codice);
+    let originale = titolo_inglese(codice);
     if let Some(d) = descrizione(codice) {
         return DescrizioneDtc {
             testo: d.to_string(),
             lingua: Some(LinguaDescrizione::Italiano),
             generico,
+            originale,
+            traduzione_automatica: false,
         };
     }
-    if let Some(t) = titolo_inglese(codice) {
+    if let Some(t) = titolo_italiano(codice) {
+        return DescrizioneDtc {
+            testo: t.to_string(),
+            lingua: Some(LinguaDescrizione::Italiano),
+            generico,
+            originale,
+            traduzione_automatica: true,
+        };
+    }
+    if let Some(t) = originale {
         return DescrizioneDtc {
             testo: t.to_string(),
             lingua: Some(LinguaDescrizione::Inglese),
             generico,
+            originale,
+            traduzione_automatica: false,
         };
     }
     let testo = if generico {
@@ -203,6 +247,8 @@ pub fn descrivi(codice: &str) -> DescrizioneDtc {
         testo: testo.to_string(),
         lingua: None,
         generico,
+        originale: None,
+        traduzione_automatica: false,
     }
 }
 
@@ -269,12 +315,40 @@ mod tests {
     fn descrivi_solo_in_archivio() {
         assert!(descrizione("P0C73").is_none());
         let d = descrivi("P0C73");
-        assert_eq!(d.lingua, Some(LinguaDescrizione::Inglese));
+        // Nessuna descrizione curata: vale la traduzione automatica, con
+        // l'originale inglese sempre accanto.
+        assert_eq!(d.lingua, Some(LinguaDescrizione::Italiano));
+        assert!(d.traduzione_automatica);
         assert_eq!(
-            d.testo,
-            "Motor Electronics Coolant Pump A Control Performance"
+            d.originale,
+            Some("Motor Electronics Coolant Pump A Control Performance")
         );
-        assert!(descrizione_o_nota("P0C73").ends_with("(descrizione in inglese)"));
+        assert_ne!(Some(d.testo.as_str()), d.originale);
+        assert_eq!(descrizione_o_nota("P0C73"), d.testo);
+        // Le descrizioni curate non sono marcate come automatiche.
+        assert!(!descrivi("P0420").traduzione_automatica);
+        assert!(descrivi("P0420").originale.is_some());
+    }
+
+    #[test]
+    fn traduzione_allineata_all_originale() {
+        // Stessi codici, nello stesso ordine, e nessun titolo vuoto o rimasto
+        // identico all'inglese.
+        let en: Vec<(&str, &str)> = DATI_GENERICI
+            .lines()
+            .filter_map(|r| r.split_once('\t'))
+            .collect();
+        let it: Vec<(&str, &str)> = DATI_ITALIANI
+            .lines()
+            .filter_map(|r| r.split_once('\t'))
+            .collect();
+        assert_eq!(en.len(), it.len());
+        for ((ce, te), (ci, ti)) in en.iter().zip(it.iter()) {
+            assert_eq!(ce, ci);
+            assert!(!ti.trim().is_empty(), "{ci}");
+            assert!(!ti.contains('\t') && !ti.contains('"'), "{ci}");
+            assert_ne!(te, ti, "{ci} non tradotto");
+        }
     }
 
     #[test]

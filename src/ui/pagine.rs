@@ -190,6 +190,43 @@ pub(super) fn disegna_diagnosi(ui: &mut egui::Ui, d: &DiagnosisReport, stretto: 
                 );
             }
         }
+        // Le descrizioni non curate sono traduzioni automatiche: accanto resta
+        // sempre il titolo inglese originale.
+        let tradotti: Vec<(String, &'static str)> = d
+            .dtc
+            .iter()
+            .filter_map(|x| {
+                let info = crate::obd::dtc::descrivi(&x.codice);
+                match (info.traduzione_automatica, info.originale) {
+                    (true, Some(o)) => Some((x.codice.clone(), o)),
+                    _ => None,
+                }
+            })
+            .collect();
+        if !tradotti.is_empty() {
+            ui.add_space(tema::SP_1);
+            for (codice, originale) in &tradotti {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(format!("{codice} · originale inglese: {originale}"))
+                            .small()
+                            .color(tema::TESTO_2),
+                    )
+                    .wrap(),
+                );
+            }
+            ui.add(
+                egui::Label::new(
+                    RichText::new(
+                        "Descrizione tradotta automaticamente, non rivista da un tecnico: in \
+                         caso di dubbio vale l'originale inglese.",
+                    )
+                    .small()
+                    .color(tema::TESTO_3),
+                )
+                .wrap(),
+            );
+        }
         ui.add_space(tema::SP_1);
         riga_lettura(ui, "Codici confermati", &d.lettura_confermati);
         riga_lettura(ui, "Codici in sospeso", &d.lettura_in_sospeso);
