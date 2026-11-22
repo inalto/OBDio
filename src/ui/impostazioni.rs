@@ -1,8 +1,10 @@
-//! Scheda Impostazioni: per ora la sola pubblicazione MQTT.
+//! Pagina Impostazioni: pubblicazione MQTT, cartelle, informazioni.
 
 use eframe::egui::{self, Color32, RichText, ScrollArea};
 
-use super::{App, GIALLO, GRIGIO, ROSSO, VERDE};
+use super::componenti::{self, nota, paragrafo, riga_valore, scheda_titolata};
+use super::icone;
+use super::{App, GIALLO, GRIGIO, ROSSO, VERDE, apri_cartella, tema};
 use crate::config;
 use crate::mqtt::{Argomenti, Campo, MqttConfig, Problema, StatoMqtt, StatoMqttInfo};
 use crate::worker::Comando;
@@ -48,12 +50,6 @@ impl Impostazioni {
     }
 }
 
-fn sezione(ui: &mut egui::Ui, titolo: &str) {
-    ui.add_space(10.0);
-    ui.label(RichText::new(titolo).heading());
-    ui.separator();
-}
-
 /// Campo con il messaggio di errore sotto, se c'è.
 fn con_errore(
     ui: &mut egui::Ui,
@@ -69,46 +65,139 @@ fn con_errore(
     });
 }
 
-fn nota(ui: &mut egui::Ui, testo: &str) {
-    ui.label(RichText::new(testo).small().color(GRIGIO));
+/// Riga del modulo: sul largo etichetta a sinistra e campo a destra; sullo
+/// stretto etichetta sopra e campo a tutta larghezza.
+fn riga_modulo(
+    ui: &mut egui::Ui,
+    stretto: bool,
+    etichetta: &str,
+    contenuto: impl FnOnce(&mut egui::Ui),
+) {
+    if stretto {
+        if !etichetta.is_empty() {
+            ui.label(RichText::new(etichetta).color(tema::TESTO_2));
+        }
+        contenuto(ui);
+        ui.add_space(tema::SP_2);
+    } else {
+        ui.horizontal_top(|ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(LARGHEZZA_ETICHETTA, ui.spacing().interact_size.y),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    ui.set_width(LARGHEZZA_ETICHETTA);
+                    ui.label(RichText::new(etichetta).color(tema::TESTO_2));
+                },
+            );
+            ui.vertical(|ui| {
+                ui.set_max_width(LARGHEZZA_CAMPO);
+                contenuto(ui)
+            });
+        });
+        ui.add_space(tema::SP_1);
+    }
 }
+
+/// Colonna delle etichette del modulo sul layout largo.
+const LARGHEZZA_ETICHETTA: f32 = 200.0;
+/// Larghezza massima dei campi di testo sul layout largo.
+const LARGHEZZA_CAMPO: f32 = 340.0;
 
 impl App {
     pub(super) fn pagina_impostazioni(&mut self, ui: &mut egui::Ui) {
+        let stretto = self.disposizione.stretta();
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            ui.set_max_width(760.0);
-            ui.label(RichText::new("Impostazioni").heading());
-            ui.add_space(4.0);
-            ui.label(
-                "OBDio può pubblicare i dati letti su un broker MQTT, per esempio per Home \
-                 Assistant, mentre continua a funzionare come sempre. Se il broker non è \
-                 raggiungibile la lettura dei dati non rallenta: i messaggi in eccesso vengono \
-                 scartati e contati.",
-            );
-
-            sezione(ui, "Pubblicazione MQTT");
-            self.modulo_mqtt(ui);
-            self.stato_mqtt(ui);
-            self.anteprima_argomenti(ui);
-
-            sezione(ui, "Sicurezza e riservatezza");
-            ui.label(
-                "Il VIN non viene mai pubblicato, nemmeno se lo includi nel riepilogo della \
-                 diagnosi.",
-            );
-            ui.label(
-                RichText::new(
-                    "La connessione al broker non è cifrata: TLS non è supportato in questa \
-                     versione. Utente, password e dati viaggiano in chiaro sulla rete. Usa un \
-                     broker nella tua rete locale e una password che non usi altrove.",
-                )
-                .color(GIALLO),
-            );
-            ui.add_space(12.0);
+            if !stretto {
+                ui.set_max_width(800.0);
+            }
+            scheda_titolata(ui, "Pubblicazione MQTT", |ui| {
+                paragrafo(
+                    ui,
+                    "OBDio può pubblicare i dati letti su un broker MQTT, per esempio per Home \
+                     Assistant, mentre continua a funzionare come sempre. Se il broker non è \
+                     raggiungibile la lettura dei dati non rallenta: i messaggi in eccesso \
+                     vengono scartati e contati.",
+                );
+                ui.add_space(tema::SP_3);
+                self.modulo_mqtt(ui, stretto);
+            });
+            scheda_titolata(ui, "Stato della pubblicazione", |ui| self.stato_mqtt(ui));
+            scheda_titolata(ui, "Argomenti pubblicati", |ui| {
+                self.anteprima_argomenti(ui, stretto)
+            });
+            scheda_titolata(ui, "Sicurezza e riservatezza", |ui| {
+                ui.add(
+                    egui::Label::new(
+                        "Il VIN non viene mai pubblicato, nemmeno se lo includi nel riepilogo \
+                         della diagnosi.",
+                    )
+                    .wrap(),
+                );
+                ui.add_space(tema::SP_1);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "La connessione al broker non è cifrata: TLS non è supportato in \
+                             questa versione. Utente, password e dati viaggiano in chiaro \
+                             sulla rete. Usa un broker nella tua rete locale e una password \
+                             che non usi altrove.",
+                        )
+                        .color(GIALLO),
+                    )
+                    .wrap(),
+                );
+            });
+            scheda_titolata(ui, "Cartelle", |ui| {
+                let cartelle = [
+                    ("Sessioni registrate e importate", self.cartella.clone()),
+                    (
+                        "Configurazione (cruscotti, MQTT)",
+                        config::cartella_configurazione(),
+                    ),
+                ];
+                for (i, (nome, percorso)) in cartelle.into_iter().enumerate() {
+                    if i > 0 {
+                        ui.add_space(tema::SP_2);
+                    }
+                    ui.label(nome);
+                    nota(ui, percorso.display().to_string());
+                    if ui.button("Apri la cartella").clicked() {
+                        apri_cartella(&percorso);
+                    }
+                }
+            });
+            scheda_titolata(ui, "Informazioni", |ui| {
+                riga_valore(
+                    ui,
+                    stretto,
+                    "Versione",
+                    RichText::new(env!("CARGO_PKG_VERSION")),
+                );
+                riga_valore(
+                    ui,
+                    stretto,
+                    "Cambiare pagina",
+                    RichText::new("Ctrl+1 … Ctrl+6 (nell'ordine della barra)"),
+                );
+                riga_valore(ui, stretto, "Chiudere una finestra", RichText::new("Esc"));
+                riga_valore(
+                    ui,
+                    stretto,
+                    "Unità di misura",
+                    RichText::new("Quelle dei parametri OBD (sistema metrico)"),
+                );
+                ui.add_space(tema::SP_1);
+                nota(
+                    ui,
+                    "Sotto i 900 px di larghezza l'app passa al layout da telefono: barra di \
+                     navigazione in basso e una colonna sola.",
+                );
+            });
+            ui.add_space(tema::SP_4);
         });
     }
 
-    fn modulo_mqtt(&mut self, ui: &mut egui::Ui) {
+    fn modulo_mqtt(&mut self, ui: &mut egui::Ui, stretto: bool) {
         let imp = &mut self.impostazioni;
         let problemi = if imp.mostra_problemi {
             imp.form.problemi()
@@ -116,167 +205,178 @@ impl App {
             Vec::new()
         };
         let f = &mut imp.form;
-        egui::Grid::new("modulo_mqtt")
-            .num_columns(2)
-            .spacing([16.0, 8.0])
-            .show(ui, |ui| {
-                ui.label("");
-                ui.checkbox(&mut f.attivo, "Pubblica i dati su MQTT");
-                ui.end_row();
+        riga_modulo(ui, stretto, "", |ui| {
+            ui.checkbox(&mut f.attivo, "Pubblica i dati su MQTT");
+        });
 
-                ui.label("Indirizzo del broker");
-                con_errore(ui, &problemi, Campo::Host, |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut f.host)
-                            .hint_text("192.168.1.10 oppure broker.local")
-                            .desired_width(280.0),
-                    );
-                });
-                ui.end_row();
-
-                ui.label("Porta");
-                con_errore(ui, &problemi, Campo::Porta, |ui| {
-                    ui.add(egui::DragValue::new(&mut f.porta).range(0..=65535));
-                });
-                ui.end_row();
-
-                ui.label("Utente");
-                ui.add(
-                    egui::TextEdit::singleline(&mut f.utente)
-                        .hint_text("facoltativo")
-                        .desired_width(280.0),
+        riga_modulo(ui, stretto, "Indirizzo del broker", |ui| {
+            con_errore(ui, &problemi, Campo::Host, |ui| {
+                componenti::campo_testo(
+                    ui,
+                    egui::TextEdit::singleline(&mut f.host)
+                        .hint_text("192.168.1.10 oppure broker.local")
+                        .desired_width(f32::INFINITY),
                 );
-                ui.end_row();
-
-                ui.label("Password");
-                ui.vertical(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut f.password)
-                            .password(true)
-                            .desired_width(280.0),
-                    );
-                    ui.checkbox(
-                        &mut f.ricorda_password,
-                        "Ricorda la password (salvata in chiaro)",
-                    );
-                    if f.ricorda_password {
-                        ui.label(
-                            RichText::new(
-                                "La password verrà scritta senza protezione nel file mqtt.json, \
-                                 leggibile da chiunque abbia accesso a questo PC.",
-                            )
-                            .small()
-                            .color(GIALLO),
-                        );
-                    } else {
-                        nota(
-                            ui,
-                            "Non viene salvata su disco: dopo il riavvio va inserita di nuovo.",
-                        );
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Identificativo del client");
-                con_errore(ui, &problemi, Campo::IdClient, |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut f.id_client)
-                            .hint_text("vuoto: generato a ogni avvio")
-                            .desired_width(280.0),
-                    );
-                });
-                ui.end_row();
-
-                ui.label("Prefisso degli argomenti");
-                con_errore(ui, &problemi, Campo::Prefisso, |ui| {
-                    ui.add(egui::TextEdit::singleline(&mut f.prefisso).desired_width(280.0));
-                });
-                ui.end_row();
-
-                ui.label("Nome del veicolo");
-                ui.vertical(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut f.veicolo).desired_width(280.0));
-                    let pulito = f.veicolo_pulito();
-                    if pulito != f.veicolo {
-                        nota(
-                            ui,
-                            &format!(
-                                "Negli argomenti si usa «{pulito}»: sono ammessi solo a-z, 0-9, \
-                                 «_» e «-»."
-                            ),
-                        );
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Qualità del servizio");
-                con_errore(ui, &problemi, Campo::Qos, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.radio_value(&mut f.qos, 0, "0 (al più una volta)");
-                        ui.radio_value(&mut f.qos, 1, "1 (almeno una volta)");
-                    });
-                });
-                ui.end_row();
-
-                ui.label("Intervallo per sensore");
-                con_errore(ui, &problemi, Campo::IntervalloSensore, |ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut f.intervallo_sensore_ms)
-                            .range(0..=3_600_000)
-                            .speed(10.0)
-                            .suffix(" ms"),
-                    );
-                    nota(ui, "Tempo minimo fra due messaggi dello stesso sensore.");
-                });
-                ui.end_row();
-
-                ui.label("Intervallo dell'istantanea");
-                con_errore(ui, &problemi, Campo::IntervalloIstantanea, |ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut f.intervallo_istantanea_ms)
-                            .range(0..=3_600_000)
-                            .speed(10.0)
-                            .suffix(" ms"),
-                    );
-                    nota(ui, "Tempo minimo fra due messaggi con tutti i valori.");
-                });
-                ui.end_row();
-
-                ui.label("Home Assistant");
-                ui.checkbox(
-                    &mut f.discovery_home_assistant,
-                    "Annuncia i sensori a Home Assistant (discovery)",
-                );
-                ui.end_row();
-
-                ui.label("Prefisso di discovery");
-                con_errore(ui, &problemi, Campo::PrefissoDiscovery, |ui| {
-                    ui.add_enabled(
-                        f.discovery_home_assistant,
-                        egui::TextEdit::singleline(&mut f.prefisso_discovery).desired_width(280.0),
-                    );
-                });
-                ui.end_row();
             });
+        });
 
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui
-                .add(egui::Button::new("Salva e applica").min_size(egui::vec2(0.0, 30.0)))
+        riga_modulo(ui, stretto, "Porta", |ui| {
+            con_errore(ui, &problemi, Campo::Porta, |ui| {
+                ui.add(egui::DragValue::new(&mut f.porta).range(0..=65535));
+            });
+        });
+
+        riga_modulo(ui, stretto, "Utente", |ui| {
+            componenti::campo_testo(
+                ui,
+                egui::TextEdit::singleline(&mut f.utente)
+                    .hint_text("facoltativo")
+                    .desired_width(f32::INFINITY),
+            );
+        });
+
+        riga_modulo(ui, stretto, "Password", |ui| {
+            componenti::campo_testo(
+                ui,
+                egui::TextEdit::singleline(&mut f.password)
+                    .password(true)
+                    .desired_width(f32::INFINITY),
+            );
+            ui.checkbox(
+                &mut f.ricorda_password,
+                "Ricorda la password (salvata in chiaro)",
+            );
+            if f.ricorda_password {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "La password verrà scritta senza protezione nel file mqtt.json, \
+                             leggibile da chiunque abbia accesso a questo PC.",
+                        )
+                        .small()
+                        .color(GIALLO),
+                    )
+                    .wrap(),
+                );
+            } else {
+                nota(
+                    ui,
+                    "Non viene salvata su disco: dopo il riavvio va inserita di nuovo.",
+                );
+            }
+        });
+
+        riga_modulo(ui, stretto, "Identificativo del client", |ui| {
+            con_errore(ui, &problemi, Campo::IdClient, |ui| {
+                componenti::campo_testo(
+                    ui,
+                    egui::TextEdit::singleline(&mut f.id_client)
+                        .hint_text("vuoto: generato a ogni avvio")
+                        .desired_width(f32::INFINITY),
+                );
+            });
+        });
+
+        riga_modulo(ui, stretto, "Prefisso degli argomenti", |ui| {
+            con_errore(ui, &problemi, Campo::Prefisso, |ui| {
+                componenti::campo_testo(
+                    ui,
+                    egui::TextEdit::singleline(&mut f.prefisso).desired_width(f32::INFINITY),
+                );
+            });
+        });
+
+        riga_modulo(ui, stretto, "Nome del veicolo", |ui| {
+            componenti::campo_testo(
+                ui,
+                egui::TextEdit::singleline(&mut f.veicolo).desired_width(f32::INFINITY),
+            );
+            let pulito = f.veicolo_pulito();
+            if pulito != f.veicolo {
+                nota(
+                    ui,
+                    format!(
+                        "Negli argomenti si usa «{pulito}»: sono ammessi solo a-z, 0-9, «_» e \
+                         «-»."
+                    ),
+                );
+            }
+        });
+
+        riga_modulo(ui, stretto, "Qualità del servizio", |ui| {
+            con_errore(ui, &problemi, Campo::Qos, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.radio_value(&mut f.qos, 0, "0 (al più una volta)");
+                    ui.radio_value(&mut f.qos, 1, "1 (almeno una volta)");
+                });
+            });
+        });
+
+        riga_modulo(ui, stretto, "Intervallo per sensore", |ui| {
+            con_errore(ui, &problemi, Campo::IntervalloSensore, |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut f.intervallo_sensore_ms)
+                        .range(0..=3_600_000)
+                        .speed(10.0)
+                        .suffix(" ms"),
+                );
+                nota(ui, "Tempo minimo fra due messaggi dello stesso sensore.");
+            });
+        });
+
+        riga_modulo(ui, stretto, "Intervallo dell'istantanea", |ui| {
+            con_errore(ui, &problemi, Campo::IntervalloIstantanea, |ui| {
+                ui.add(
+                    egui::DragValue::new(&mut f.intervallo_istantanea_ms)
+                        .range(0..=3_600_000)
+                        .speed(10.0)
+                        .suffix(" ms"),
+                );
+                nota(ui, "Tempo minimo fra due messaggi con tutti i valori.");
+            });
+        });
+
+        riga_modulo(ui, stretto, "Home Assistant", |ui| {
+            ui.checkbox(
+                &mut f.discovery_home_assistant,
+                "Annuncia i sensori (discovery)",
+            );
+        });
+
+        riga_modulo(ui, stretto, "Prefisso di discovery", |ui| {
+            con_errore(ui, &problemi, Campo::PrefissoDiscovery, |ui| {
+                ui.add_enabled_ui(f.discovery_home_assistant, |ui| {
+                    componenti::campo_testo(
+                        ui,
+                        egui::TextEdit::singleline(&mut f.prefisso_discovery)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+            });
+        });
+
+        ui.add_space(tema::SP_3);
+        let mut pulsanti = |ui: &mut egui::Ui| {
+            if componenti::pulsante(ui, stretto, true, componenti::primario("Salva e applica"))
                 .clicked()
             {
                 self.applica_mqtt(false);
             }
-            if ui
-                .add(egui::Button::new("Disattiva").min_size(egui::vec2(0.0, 30.0)))
-                .clicked()
-            {
+            if componenti::pulsante(ui, stretto, true, egui::Button::new("Disattiva")).clicked() {
                 self.applica_mqtt(true);
             }
-        });
+        };
+        if stretto {
+            pulsanti(ui);
+        } else {
+            ui.horizontal(|ui| {
+                ui.add_space(LARGHEZZA_ETICHETTA + ui.spacing().item_spacing.x);
+                pulsanti(ui);
+            });
+        }
         if let Some((testo, errore)) = &self.impostazioni.messaggio {
             let colore = if *errore { ROSSO } else { VERDE };
-            ui.label(RichText::new(testo).color(colore));
+            ui.add(egui::Label::new(RichText::new(testo).color(colore)).wrap());
         }
     }
 
@@ -314,14 +414,16 @@ impl App {
 
     fn stato_mqtt(&self, ui: &mut egui::Ui) {
         let info = &self.impostazioni.info;
-        sezione(ui, "Stato");
         let colore = match &info.stato {
             StatoMqtt::Disattivato => GRIGIO,
             StatoMqtt::Connessione => GIALLO,
             StatoMqtt::Connesso => VERDE,
             StatoMqtt::Errore(_) => ROSSO,
         };
-        ui.label(RichText::new(info.stato.testo()).color(colore).strong());
+        ui.horizontal(|ui| {
+            icone::pallino(ui, colore);
+            ui.label(RichText::new(info.stato.testo()).color(colore).strong());
+        });
         ui.label(format!(
             "Messaggi accodati per l'invio: {} — scartati: {}",
             info.pubblicati, info.scartati
@@ -332,15 +434,17 @@ impl App {
              sono arrivati mentre il broker non era raggiungibile.",
         );
         if let Some(e) = &info.ultimo_errore {
-            ui.label(RichText::new(format!("Ultimo errore: {e}")).color(ROSSO));
+            ui.add(
+                egui::Label::new(RichText::new(format!("Ultimo errore: {e}")).color(ROSSO)).wrap(),
+            );
         }
     }
 
-    fn anteprima_argomenti(&self, ui: &mut egui::Ui) {
+    fn anteprima_argomenti(&self, ui: &mut egui::Ui, stretto: bool) {
         let f = &self.impostazioni.form;
         let a = Argomenti::new(f);
-        sezione(ui, "Argomenti pubblicati");
         nota(ui, "Con le impostazioni del modulo qui sopra:");
+        ui.add_space(tema::SP_1);
         let mut righe = vec![
             (
                 a.stato(),
@@ -363,15 +467,27 @@ impl App {
                 "configurazione per Home Assistant (trattenuta)",
             ));
         }
-        egui::Grid::new("anteprima_mqtt")
-            .num_columns(2)
-            .spacing([16.0, 4.0])
-            .show(ui, |ui| {
-                for (argomento, descrizione) in righe {
-                    ui.label(RichText::new(argomento).monospace());
-                    ui.label(RichText::new(descrizione).color(GRIGIO));
-                    ui.end_row();
-                }
-            });
+        for (argomento, descrizione) in righe {
+            if stretto {
+                ui.add(egui::Label::new(RichText::new(argomento).monospace()).wrap());
+                nota(ui, descrizione);
+                ui.add_space(tema::SP_1);
+            } else {
+                ui.horizontal_top(|ui| {
+                    let largo = (ui.available_width() * 0.5).min(380.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(largo, 0.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.set_width(largo);
+                            ui.add(egui::Label::new(RichText::new(argomento).monospace()).wrap());
+                        },
+                    );
+                    ui.add(
+                        egui::Label::new(RichText::new(descrizione).color(tema::TESTO_2)).wrap(),
+                    );
+                });
+            }
+        }
     }
 }

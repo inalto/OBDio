@@ -37,6 +37,17 @@ pub const DEMO: Color32 = Color32::from_rgb(0xF9, 0x73, 0x16);
 
 /// Testo sopra un colore pieno chiaro (accento, demo, attenzione).
 pub const TESTO_SU_COLORE: Color32 = SFONDO;
+/// Testo sopra un colore pieno scuro (pulsante di pericolo).
+pub const TESTO_SU_SCURO: Color32 = Color32::WHITE;
+/// Fondo dei pulsanti delle azioni distruttive (rose-900).
+pub const PERICOLO_SCURO: Color32 = Color32::from_rgb(0x88, 0x13, 0x37);
+/// Fondo della fascia degli errori (rose-950).
+pub const FONDO_ERRORE: Color32 = Color32::from_rgb(0x4C, 0x05, 0x19);
+/// Linee dei marcatori nei grafici (yellow-200: più chiaro di `attenzione`
+/// per restare distinto dalla serie ambra).
+pub const MARCATORE: Color32 = Color32::from_rgb(0xFE, 0xF0, 0x8A);
+/// Fascia «dato mancante» nei grafici (rose-500 molto velato).
+pub const BUCO: Color32 = Color32::from_rgba_premultiplied(120, 20, 32, 70);
 
 /// Serie dei grafici, in quest'ordine: sky, amber, emerald, pink, violet,
 /// teal, orange, lime.
@@ -82,6 +93,68 @@ pub const BERSAGLIO_STRETTO: f32 = 44.0;
 /// Sotto questa larghezza disponibile il layout è «stretto».
 pub const LARGHEZZA_STRETTA: f32 = 900.0;
 
+/// Finestra minima: abbastanza stretta da raggiungere il layout da telefono.
+pub const FINESTRA_MIN: [f32; 2] = [360.0, 560.0];
+
+/// Barra laterale di navigazione (layout largo).
+pub const LARGHEZZA_BARRA_LATERALE: f32 = 184.0;
+/// Barra di navigazione in basso (layout stretto).
+pub const ALTEZZA_BARRA_NAV: f32 = 64.0;
+/// Riga della barra di stato in alto.
+pub const ALTEZZA_BARRA_STATO: f32 = 44.0;
+/// Lato delle icone di navigazione e tratto con cui sono disegnate.
+pub const LATO_ICONA: f32 = 22.0;
+pub const TRATTO_ICONA: f32 = 1.75;
+
+/// Spazio da lasciare libero in cima alla finestra, sopra la barra di stato.
+///
+/// Su Android servirà per la barra di stato del sistema; oggi winit non
+/// comunica gli «insets» dell'area sicura, quindi vale 0 ovunque. È l'unico
+/// punto da cambiare quando l'informazione sarà disponibile.
+pub fn riserva_superiore() -> f32 {
+    0.0
+}
+
+/// Disposizione dell'interfaccia secondo la larghezza disponibile
+/// (docs/DESIGN.md, sezione 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Disposizione {
+    /// ≥ 900 px: barra laterale, pannelli affiancati.
+    Larga,
+    /// < 900 px: barra in basso, colonna singola.
+    Stretta,
+}
+
+impl Disposizione {
+    pub fn per_larghezza(larghezza: f32) -> Self {
+        if larghezza < LARGHEZZA_STRETTA {
+            Disposizione::Stretta
+        } else {
+            Disposizione::Larga
+        }
+    }
+
+    pub fn stretta(self) -> bool {
+        self == Disposizione::Stretta
+    }
+
+    /// Altezza minima dei bersagli (pulsanti, campi, righe toccabili).
+    pub fn bersaglio(self) -> f32 {
+        match self {
+            Disposizione::Larga => BERSAGLIO_LARGO,
+            Disposizione::Stretta => BERSAGLIO_STRETTO,
+        }
+    }
+
+    /// Margine del contenuto della pagina.
+    pub fn margine(self) -> f32 {
+        match self {
+            Disposizione::Larga => SP_4,
+            Disposizione::Stretta => SP_3,
+        }
+    }
+}
+
 /// Tipografia: nota, corpo, titolo di sezione.
 pub const CARATTERE_NOTA: f32 = 12.0;
 pub const CARATTERE_CORPO: f32 = 14.5;
@@ -105,6 +178,23 @@ pub fn tratto_bordo() -> Stroke {
     Stroke::new(BORDO_SOTTILE, BORDO)
 }
 
+/// Adatta lo stile alla disposizione: bersagli da 44 px sul layout stretto.
+/// Cambia lo stile solo quando la disposizione cambia; restituisce `true` se
+/// l'ha cambiato.
+pub fn adatta(ctx: &egui::Context, d: Disposizione) -> bool {
+    let voluto = d.bersaglio();
+    let attuale = ctx.style_of(egui::Theme::Dark).spacing.interact_size.y;
+    if (attuale - voluto).abs() < 0.5 {
+        return false;
+    }
+    ctx.style_mut_of(egui::Theme::Dark, |s| {
+        s.spacing.interact_size.y = voluto;
+        // Le caselle a discesa e i menu si toccano con il dito.
+        s.spacing.combo_height = if d.stretta() { 320.0 } else { 200.0 };
+    });
+    true
+}
+
 /// Applica i token ai visuali scuri di egui.
 pub fn applica(ctx: &egui::Context) {
     ctx.set_theme(egui::Theme::Dark);
@@ -118,7 +208,7 @@ pub fn applica(ctx: &egui::Context) {
         }
         s.spacing.item_spacing = egui::vec2(SP_2, SP_2);
         s.spacing.button_padding = egui::vec2(SP_3, SP_1);
-        s.spacing.interact_size.y = BERSAGLIO_LARGO - SP_1;
+        s.spacing.interact_size.y = BERSAGLIO_LARGO;
         // Caselle di spunta più grandi: con il raggio di 6 px una casella da
         // 14 px sembrerebbe un pulsante di opzione rotondo.
         s.spacing.icon_width = 18.0;
@@ -185,6 +275,22 @@ pub fn applica(ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disposizione_secondo_la_larghezza() {
+        assert_eq!(Disposizione::per_larghezza(360.0), Disposizione::Stretta);
+        assert_eq!(Disposizione::per_larghezza(899.9), Disposizione::Stretta);
+        assert_eq!(Disposizione::per_larghezza(900.0), Disposizione::Larga);
+        assert_eq!(Disposizione::per_larghezza(1280.0), Disposizione::Larga);
+        assert_eq!(Disposizione::Stretta.bersaglio(), 44.0);
+        assert_eq!(Disposizione::Larga.bersaglio(), 32.0);
+        // La finestra minima deve far raggiungere il layout stretto.
+        assert_eq!(
+            Disposizione::per_larghezza(FINESTRA_MIN[0]),
+            Disposizione::Stretta
+        );
+        assert_eq!(riserva_superiore(), 0.0);
+    }
 
     #[test]
     fn tavolozza_delle_serie_inizia_con_l_accento() {

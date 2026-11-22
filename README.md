@@ -29,13 +29,58 @@ scrivibile, in `Documenti\OBDio\sessioni`).
 L'eseguibile non è firmato: al primo avvio Windows SmartScreen può mostrare un
 avviso («Ulteriori informazioni» → «Esegui comunque»).
 
+## Navigazione
+
+L'app ha sei pagine, sempre le stesse: **Connessione**, **Diagnosi**,
+**Cruscotto**, **Sensori**, **Sessioni**, **Impostazioni**.
+
+![Pagina Connessione](docs/schermate/connessione.png)
+
+- **Finestra larga** (da 900 px in su): a sinistra la barra con icona e nome
+  di ogni pagina; quella aperta è evidenziata in azzurro.
+- **Finestra stretta** (sotto i 900 px, come un telefono): la barra scende in
+  basso, con icone e nomi brevi (*Collega*, *Diagnosi*, *Cruscotto*,
+  *Sensori*, *Sessioni*, *Opzioni*), il contenuto va su una colonna sola e
+  pulsanti, campi e righe toccabili sono alti almeno 44 px. La finestra si
+  può restringere fino a 360 × 560 px.
+- In alto, su ogni pagina, la **barra di stato**: nome della pagina, stato del
+  collegamento, registrazione in corso con la durata e, se attiva, la
+  pubblicazione MQTT. Sotto compaiono la fascia arancione della demo o della
+  riproduzione, la barra di trasporto e gli eventuali errori.
+
+| Tasti | Azione |
+|---|---|
+| Ctrl+1 … Ctrl+6 | Apre la pagina corrispondente, nell'ordine della barra |
+| Esc | Chiude la finestra aperta (conferma, scelta del file, anteprima) |
+
+Chiudendo l'app con modifiche al cruscotto non salvate compare la domanda
+**Salva / Non salvare / Annulla**.
+
+| Diagnosi su telefono | Cruscotto su telefono | Sensori su telefono |
+|---|---|---|
+| ![Diagnosi a 390 px](docs/schermate/stretto_diagnosi.png) | ![Cruscotto a 390 px](docs/schermate/stretto_cruscotto.png) | ![Sensori a 390 px](docs/schermate/stretto_sensori.png) |
+
+Sul layout stretto:
+
+- **Diagnosi**: i codici diventano schede (codice e stati su una riga, la
+  descrizione sotto), il fermo immagine una lista etichetta/valore;
+  *Cancella codici guasto…* sta in fondo alla pagina, in un riquadro rosso
+  separato da *Leggi diagnosi*.
+- **Sensori**: un selettore **Elenco | Grafici** sceglie che cosa vedere;
+  lettura, registrazione e marcatori sono in una striscia di tre pulsanti
+  visibile in entrambi i casi. Un grafico per riga.
+- **Sessioni**: prima l'elenco, poi il dettaglio con **Tutte le sessioni**
+  per tornare indietro.
+- **Cruscotto**: griglia a 4 colonne e ispettore dal basso (vedi
+  [Personalizzare](#personalizzare)).
+
 ## Provare la demo
 
 1. Scheda **Connessione** → **Avvia la demo**.
-2. Scheda **Codici guasto e fermo immagine** → **Leggi diagnosi**: compare
+2. Scheda **Diagnosi** → **Leggi diagnosi**: compare
    P0420 con il fermo immagine a 69 km/h, 2.128 giri/min, 83 °C, STFT +0,78 %,
    LTFT +8,59 %.
-3. Scheda **Sensori** → **Avvia lettura**, poi **Avvia registrazione**.
+3. Scheda **Sensori** → **Avvia lettura**, poi **Registra**.
    Prova anche **Un grafico per sensore**, **Tutti** e il campo di ricerca.
 
 In demo una fascia arancione **MODALITÀ DEMO** resta sempre visibile e ogni
@@ -90,6 +135,8 @@ viene mai registrata.
 
 ## Pagina Sensori
 
+![Pagina Sensori in demo, con il confronto delle sonde](docs/schermate/sensori.png)
+
 La scheda **Sensori** elenca **tutti** i parametri del catalogo che la
 centralina dichiara di supportare, raggruppati in Motore, Carburante e
 miscela, Sonde lambda, Temperature e pressioni, Distanze e tempi, Altro.
@@ -109,8 +156,10 @@ miscela, Sonde lambda, Temperature e pressioni, Distanze e tempi, Altro.
   dispongono in colonne secondo la larghezza della finestra.
   **Azzera min/max** riparte da zero con le statistiche.
 - Senza collegamento l'elenco mostra i parametri presenti nei dati già letti.
-- Sotto l'elenco restano **Avvia lettura**, la registrazione, i marcatori e
-  l'ultima sessione salvata.
+- Sopra l'elenco ci sono tre pulsanti: **Avvia lettura** (o *Ferma
+  lettura*), **Registra** (o *Ferma reg.*) e **Marcatore…**, che apre i
+  marcatori rapidi e un campo per scriverne uno; sotto, la durata della
+  registrazione in corso o l'ultima sessione salvata.
 
 I grafici servono a confrontare i segnali: l'app non deduce se catalizzatore o
 sonde siano guasti.
@@ -234,7 +283,7 @@ non ne impediscono il caricamento; se è illeggibile viene conservato come
 1. Collega l'adattatore; in **Connessione** controlla protocollo e centralina
    (sulla 208 sono attesi «ISO 15765-4 CAN, ID a 11 bit, 500 kbit/s» ed ECU
    `7E8`).
-2. **Codici guasto e fermo immagine** → **Leggi diagnosi**. Se la leggi prima
+2. **Diagnosi** → **Leggi diagnosi**. Se la leggi prima
    di registrare, la diagnosi viene salvata dentro la sessione.
 3. **Sensori**: la selezione rapida **Diagnosi P0420** attiva i segnali che
    la centralina espone davvero:
@@ -280,8 +329,9 @@ con lo stesso nome (data e ora; le sessioni demo hanno il suffisso `_DEMO`):
 - `AAAA-MM-GG_HH-MM-SS.csv` — l'esportazione.
 
 **Apri la cartella** (in *Sensori* dopo una registrazione, oppure
-in *Sessioni salvate*) la mostra in Esplora file. Nella scheda **Sessioni
-salvate** scegli una sessione per rivedere grafici e diagnosi senza collegare
+in *Sessioni*) la mostra in Esplora file. Nella scheda **Sessioni** scegli una
+sessione (l'elenco mostra data e ora in chiaro, con le etichette *demo* e
+*importata*) per rivedere grafici e diagnosi senza collegare
 il veicolo; **Esporta…** la scrive in un altro formato (vedi sotto).
 
 Il formato del CSV è descritto in [docs/FORMATO_CSV.md](docs/FORMATO_CSV.md).
@@ -291,7 +341,9 @@ le letture mancanti hanno `valore` vuoto e uno `stato` esplicito.
 
 ## Importare ed esportare le sessioni
 
-Nella scheda **Sessioni salvate**:
+![Pagina Sessioni con una sessione demo aperta](docs/schermate/sessioni.png)
+
+Nella scheda **Sessioni**:
 
 - **Esporta…** (per la sessione aperta) offre quattro formati:
   - *Sessione OBDio (.obdio.jsonl)*: una copia del file, riapribile e
@@ -341,7 +393,7 @@ pagina Sensori, grafici e MQTT funzionano come con l'auto collegata.
 
 ![Riproduzione con il cruscotto «Guida»](docs/schermate/riproduzione.png)
 
-- Da **Sessioni salvate**: apri la sessione e premi **Rivivi questa
+- Da **Sessioni**: apri la sessione e premi **Rivivi questa
   sessione**. Dalla scheda **Connessione**: **Riproduci una sessione…**.
   Con un adattatore collegato la riproduzione non parte: scollegalo prima
   (l'app offre il pulsante).
@@ -399,8 +451,11 @@ interpretabile).
 
 ## Cancellare i codici guasto
 
-Nella scheda **Codici guasto e fermo immagine**, il pulsante rosso
-**Cancella codici guasto…** (a destra, lontano da *Leggi diagnosi*) invia il
+![Pagina Diagnosi con P0420 e il fermo immagine](docs/schermate/diagnosi.png)
+
+Nella scheda **Diagnosi**, il pulsante rosso **Cancella codici guasto…** (a
+destra sul layout largo, in fondo alla pagina su quello stretto, comunque
+lontano da *Leggi diagnosi*) invia il
 servizio OBD 04. È attivo solo con l'adattatore collegato e nessuna
 operazione in corso, e apre una finestra di conferma: il pulsante di
 cancellazione si abilita solo dopo la spunta «Ho letto e voglio cancellare i
@@ -440,6 +495,8 @@ centraline rifiutano la richiesta.
 > collegamento caduto). **Non è mai stata provata su un veicolo.**
 
 ## MQTT
+
+![Pagina Impostazioni con il modulo MQTT](docs/schermate/impostazioni.png)
 
 OBDio può pubblicare i dati in tempo reale su un broker MQTT (per esempio per
 Home Assistant): un argomento per sensore, un JSON con tutti i valori, la
@@ -484,7 +541,7 @@ non è verificabile: è un'ipotesi, non un dato.
 
 | Verifica | Esito |
 |---|---|
-| Test automatici (176): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
+| Test automatici (184): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
 | Flusso demo attraverso il thread di lavoro reale: collegamento, P0420, fermo immagine, polling con priorità alle sonde, registrazione, CSV, riapertura | Superato |
 | Distanza parziale attraverso il thread di lavoro reale: campioni monotoni in km, registrati nella sessione e nel CSV | Superato |
 | Cancellazione dei codici in demo attraverso il thread di lavoro reale: copia della diagnosi, servizio 04, rilettura con P0420 solo permanente, MIL spenta, prontezza azzerata | Superato |
@@ -492,8 +549,9 @@ non è verificabile: è un'ipotesi, non un dato.
 | Cancellazione dei codici su un veicolo reale | **Non provata** |
 | Conversazione MQTT reale fra il thread di lavoro (con la demo) e un broker di prova nello stesso processo (sette test): ultima volontà e credenziali nel CONNECT, stato in linea trattenuto, sensori numerici, istantanea con `null` per i valori assenti, diagnosi senza VIN, discovery, QoS 1, broker che cade e torna, chiusura con broker muto | Superato |
 | Pubblicazione MQTT verso un broker vero (Mosquitto o altro) e discovery riconosciuta da Home Assistant | **Non provate** |
-| Interfaccia in demo, con schermate: connessione, diagnosi, fermo immagine, grafici con buco del dato e marcatori, pagina Sensori (confronto e un grafico per sensore con dieci sensori), sessione riaperta | Superato |
-| Cruscotto in demo, con schermate: «Guida» in movimento, «Diagnosi P0420» con l'interruzione della sonda a valle, modo Modifica con ispettore, una pagina con i sette tipi (parametro non supportato, risposta mancante), layout stretto a 420 px, lettura avviata e fermata dal cruscotto | Superato; trascinamenti e ridimensionamenti col mouse **non provati** dal collaudo automatico |
+| Interfaccia in demo, con schermate di **ogni pagina a 1280 × 820 e a 390 × 844** (layout da telefono): connessione, diagnosi, fermo immagine, grafici con buco del dato e marcatori, pagina Sensori (elenco, confronto, un grafico per sensore con diciassette sensori), sessioni (elenco e dettaglio), impostazioni, finestra di scelta del file, conferma ed esito della cancellazione, chiusura con il cruscotto non salvato | Superato |
+| Cruscotto in demo, con schermate larghe e strette: «Guida» in movimento, «Diagnosi P0420» con l'interruzione della sonda a valle, modo Modifica con ispettore, una pagina con i sette tipi (parametro non supportato, risposta mancante), lettura avviata e fermata dal cruscotto | Superato; trascinamenti e ridimensionamenti col mouse **non provati** dal collaudo automatico |
+| Uso col dito su un telefono vero, tastiera Ctrl+1…6 premuta a mano | **Non provati**: il layout stretto è verificato solo restringendo la finestra su Windows |
 | Nuovi PID (contachilometri, pedale, coppia, consumo, pressioni…) su un veicolo reale | **Non provati**: formule da Wikipedia, verificate solo con test sui valori; quelle dei PID 49, 4A e 4C sono dedotte |
 | Riproduzione attraverso il thread di lavoro reale: sessione demo registrata, riaperta e rivissuta a 10× con gli stessi campioni (letture fallite comprese) e marcatori; pausa, salto avanti e indietro, ripetizione; registrazione, marcatori, lettura e cancellazione della diagnosi rifiutati; MQTT con origine «riproduzione»; sessione Torque importata con parametri liberi | Superato |
 | Importazione ed esportazione: andata e ritorno esatti del CSV OBDio, CSV in stile Torque scritto e riletto, conversioni °F/mph/psi, file troncati, colonne in più o in meno, byte non UTF-8, BOM, CR LF e LF, CSV di Excel in italiano, intestazione ripetuta o sola | Superato (test automatici) |

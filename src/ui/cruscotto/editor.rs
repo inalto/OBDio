@@ -141,30 +141,31 @@ impl App {
 
     pub(crate) fn barra_pagine(&mut self, ui: &mut egui::Ui, stretto: bool) {
         let mut nuova_pagina = self.cruscotto.pagina;
-        ui.horizontal(|ui| {
-            ScrollArea::horizontal()
-                .id_salt("cruscotto_schede")
-                .max_width(if stretto {
-                    ui.available_width()
-                } else {
-                    ui.available_width() - 420.0
-                })
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        for (i, p) in self.cruscotto.correnti.pagine.iter().enumerate() {
-                            ui.selectable_value(&mut nuova_pagina, i, p.nome.as_str());
-                        }
-                    });
-                });
-            if stretto {
-                return;
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.comandi_pagina(ui, true);
-            });
-        });
         if stretto {
+            // Sullo stretto le schede vanno a capo: tutte visibili, nessuno
+            // scorrimento nascosto.
+            ui.horizontal_wrapped(|ui| {
+                for (i, p) in self.cruscotto.correnti.pagine.iter().enumerate() {
+                    ui.selectable_value(&mut nuova_pagina, i, p.nome.as_str());
+                }
+            });
             ui.horizontal_wrapped(|ui| self.comandi_pagina(ui, false));
+        } else {
+            ui.horizontal(|ui| {
+                ScrollArea::horizontal()
+                    .id_salt("cruscotto_schede")
+                    .max_width(ui.available_width() - 420.0)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            for (i, p) in self.cruscotto.correnti.pagine.iter().enumerate() {
+                                ui.selectable_value(&mut nuova_pagina, i, p.nome.as_str());
+                            }
+                        });
+                    });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.comandi_pagina(ui, true);
+                });
+            });
         }
         if nuova_pagina != self.cruscotto.pagina {
             self.cruscotto.pagina = nuova_pagina;
@@ -283,7 +284,10 @@ impl App {
                     let mut chiudi = false;
                     ui.horizontal_wrapped(|ui| {
                         ui.label("Nome della pagina:");
-                        let r = ui.add(egui::TextEdit::singleline(&mut nome).desired_width(220.0));
+                        let r = crate::ui::componenti::campo_testo(
+                            ui,
+                            egui::TextEdit::singleline(&mut nome).desired_width(220.0),
+                        );
                         let invio = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                         if ui.button("Applica").clicked() || invio {
                             let i = self.cruscotto.pagina;
@@ -488,7 +492,8 @@ impl App {
                         .unwrap_or_else(|| format!("Sconosciuto «{k}»")),
                 };
                 ui.label(RichText::new(nome_attuale).color(tema::ACCENTO));
-                ui.add(
+                crate::ui::componenti::campo_testo(
+                    ui,
                     egui::TextEdit::singleline(&mut self.cruscotto.ricerca)
                         .hint_text("Cerca un parametro…")
                         .desired_width(ui.available_width()),

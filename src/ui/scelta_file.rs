@@ -10,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui::{self, RichText, ScrollArea};
 
+use super::componenti;
+use super::navigazione::{altezza_modale, larghezza_finestra};
 use super::tema;
 
 /// Esito di un fotogramma della finestra.
@@ -75,73 +77,81 @@ impl SceltaFile {
     pub fn mostra(&mut self, ctx: &egui::Context, id: &str) -> EsitoScelta {
         let mut esegui = false;
         let mut chiudi = false;
-        let largo = (ctx.content_rect().width() - 2.0 * tema::SP_6).clamp(280.0, 640.0);
-        egui::Modal::new(egui::Id::new(("scelta_file", id))).show(ctx, |ui| {
-            ui.set_width(largo);
-            ui.label(RichText::new(&self.titolo).heading());
-            if !self.spiegazione.is_empty() {
-                ui.label(RichText::new(&self.spiegazione).color(tema::TESTO_2));
-            }
-            ui.add_space(tema::SP_2);
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut self.percorso)
-                    .hint_text(self.suggerimento.as_str())
-                    .desired_width(ui.available_width()),
-            );
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                esegui = true;
-            }
-            let cartella = self.cartella();
-            let file = elenca_file(&cartella, &self.finali);
-            ui.add_space(tema::SP_2);
-            ui.label(
-                RichText::new(if file.is_empty() {
-                    format!("Nessun file adatto in {}", cartella.display())
-                } else {
-                    format!("File in {}", cartella.display())
-                })
-                .small()
-                .color(tema::TESTO_3),
-            );
-            if !file.is_empty() {
-                ScrollArea::vertical()
-                    .id_salt(("scelta_file_elenco", id))
-                    .max_height(180.0)
-                    .show(ui, |ui| {
-                        for f in &file {
-                            let nome = f
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default();
-                            let scelto = Path::new(self.percorso.trim()) == f.as_path();
-                            if ui.selectable_label(scelto, nome).clicked() {
-                                self.percorso = f.display().to_string();
-                            }
-                        }
-                    });
-            }
-            ui.add_space(tema::SP_3);
-            ui.horizontal(|ui| {
-                let pronto = !self.percorso.trim().is_empty();
-                if ui
-                    .add_enabled(
-                        pronto,
-                        egui::Button::new(
-                            RichText::new(self.pulsante.as_str())
-                                .color(tema::TESTO_SU_COLORE)
-                                .strong(),
-                        )
-                        .fill(tema::ACCENTO),
-                    )
-                    .clicked()
-                {
+        let largo = larghezza_finestra(ctx, 640.0);
+        let stretto = tema::Disposizione::per_larghezza(ctx.content_rect().width()).stretta();
+        let alto_elenco = altezza_modale(ctx, if stretto { 380.0 } else { 300.0 }).min(240.0);
+        egui::Modal::new(egui::Id::new(("scelta_file", id)))
+            .frame(componenti::cornice_finestra(ctx))
+            .backdrop_color(egui::Color32::from_black_alpha(170))
+            .show(ctx, |ui| {
+                ui.set_width(largo);
+                ui.label(RichText::new(&self.titolo).heading());
+                if !self.spiegazione.is_empty() {
+                    componenti::paragrafo(ui, &self.spiegazione);
+                }
+                ui.add_space(tema::SP_2);
+                let r = componenti::campo_testo(
+                    ui,
+                    egui::TextEdit::singleline(&mut self.percorso)
+                        .hint_text(self.suggerimento.as_str())
+                        .desired_width(ui.available_width()),
+                );
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     esegui = true;
                 }
-                if ui.button("Annulla").clicked() {
-                    chiudi = true;
+                let cartella = self.cartella();
+                let file = elenca_file(&cartella, &self.finali);
+                ui.add_space(tema::SP_2);
+                componenti::nota(
+                    ui,
+                    if file.is_empty() {
+                        format!("Nessun file adatto in {}", cartella.display())
+                    } else {
+                        format!("File in {}", cartella.display())
+                    },
+                );
+                if !file.is_empty() {
+                    ScrollArea::vertical()
+                        .id_salt(("scelta_file_elenco", id))
+                        .max_height(alto_elenco)
+                        .show(ui, |ui| {
+                            for f in &file {
+                                let nome = f
+                                    .file_name()
+                                    .map(|n| n.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                let scelto = Path::new(self.percorso.trim()) == f.as_path();
+                                if ui.selectable_label(scelto, nome).clicked() {
+                                    self.percorso = f.display().to_string();
+                                }
+                            }
+                        });
+                }
+                ui.add_space(tema::SP_3);
+                let pronto = !self.percorso.trim().is_empty();
+                let mut pulsanti = |ui: &mut egui::Ui| {
+                    if componenti::pulsante(
+                        ui,
+                        stretto,
+                        pronto,
+                        componenti::primario(&self.pulsante),
+                    )
+                    .clicked()
+                    {
+                        esegui = true;
+                    }
+                    if componenti::pulsante(ui, stretto, true, egui::Button::new("Annulla"))
+                        .clicked()
+                    {
+                        chiudi = true;
+                    }
+                };
+                if stretto {
+                    pulsanti(ui);
+                } else {
+                    ui.horizontal(|ui| pulsanti(ui));
                 }
             });
-        });
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             chiudi = true;
         }

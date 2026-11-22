@@ -13,8 +13,8 @@ const ARANCIO: Color32 = tema::SERIE[1];
 const VERDE: Color32 = tema::SERIE[2];
 const ROSA: Color32 = tema::SERIE[3];
 const VIOLA: Color32 = tema::SERIE[4];
-const BUCO: Color32 = Color32::from_rgba_premultiplied(120, 20, 20, 70);
-const MARCATORE: Color32 = Color32::from_rgb(255, 238, 88);
+const BUCO: Color32 = tema::BUCO;
+const MARCATORE: Color32 = tema::MARCATORE;
 
 pub struct Opzioni<'a> {
     /// Identificativo del gruppo di grafici (assi X collegati).
@@ -27,6 +27,9 @@ pub struct Opzioni<'a> {
     pub finestra: Option<f64>,
     /// I dati sono simulati: lo si scrive accanto a ogni curva.
     pub sintetico: bool,
+    /// Layout stretto: riquadri più alti (la pagina scorre invece di
+    /// schiacciarli) e legenda in piccolo.
+    pub stretto: bool,
 }
 
 struct Pannello {
@@ -96,7 +99,8 @@ pub fn disegna(ui: &mut egui::Ui, arch: &Archivio, o: &Opzioni<'_>) -> bool {
 
     let n = pannelli.len() as f32;
     let spazio = ui.spacing().item_spacing.y;
-    let altezza = ((ui.available_height() - spazio * (n - 1.0)) / n).max(110.0);
+    let minima = if o.stretto { 170.0 } else { 110.0 };
+    let altezza = ((ui.available_height() - spazio * (n - 1.0)) / n).max(minima);
     let da = match o.finestra {
         Some(f) => (arch.t_max - f).max(0.0),
         None => 0.0,
@@ -109,19 +113,22 @@ pub fn disegna(ui: &mut egui::Ui, arch: &Archivio, o: &Opzioni<'_>) -> bool {
         .map(|m| format!("{} s «{}»", crate::model::num_it(m.t, 1), m.etichetta))
         .collect();
     if !visibili.is_empty() {
-        ui.label(
-            egui::RichText::new(format!(
-                "Marcatori (linee tratteggiate): {}",
-                visibili.join("  ·  ")
-            ))
-            .small()
-            .color(MARCATORE),
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(format!(
+                    "Marcatori (linee tratteggiate): {}",
+                    visibili.join("  ·  ")
+                ))
+                .small()
+                .color(MARCATORE),
+            )
+            .wrap(),
         );
     }
     let altezza = if visibili.is_empty() {
         altezza
     } else {
-        ((ui.available_height() - spazio * (n - 1.0)) / n).max(110.0)
+        ((ui.available_height() - spazio * (n - 1.0)) / n).max(minima)
     };
 
     for (i, pannello) in pannelli.iter().enumerate() {
@@ -139,6 +146,7 @@ pub fn disegna(ui: &mut egui::Ui, arch: &Archivio, o: &Opzioni<'_>) -> bool {
                 sintetico: o.sintetico,
                 asse_x: ultimo,
                 legenda: true,
+                stretto: o.stretto,
             },
         );
     }
@@ -158,6 +166,7 @@ struct Riquadro<'a> {
     /// Mostra l'etichetta «Tempo (s)».
     asse_x: bool,
     legenda: bool,
+    stretto: bool,
 }
 
 /// Inizio della finestra temporale visibile.
@@ -183,7 +192,11 @@ fn disegna_pannello(ui: &mut egui::Ui, arch: &Archivio, pa: &Riquadro<'_>) {
         .grid_spacing(egui::Rangef::new(4.0, 40.0))
         .set_margin_fraction(egui::vec2(0.0, 0.08));
     if pa.legenda {
-        plot = plot.legend(Legend::default().background_alpha(0.55));
+        let mut legenda = Legend::default().background_alpha(0.55);
+        if pa.stretto {
+            legenda = legenda.text_style(egui::TextStyle::Small);
+        }
+        plot = plot.legend(legenda);
     }
     if pa.asse_x {
         plot = plot.x_axis_label("Tempo (s)");
@@ -263,6 +276,7 @@ pub fn disegna_sensore(
             sintetico,
             asse_x: false,
             legenda: false,
+            stretto: false,
         },
     );
 }

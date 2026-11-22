@@ -88,6 +88,52 @@ Una **barra di stato** in alto è sempre visibile: stato del collegamento,
 registrazione in corso con durata, pubblicazione MQTT, e la fascia arancione
 quando i dati non vengono da un veicolo (demo o riproduzione).
 
+Nota di implementazione (fase 6), dove il risultato precisa o si scosta da
+quanto sopra:
+
+- **Navigazione** in `src/ui/navigazione.rs`, icone disegnate con il
+  `Painter` in `src/ui/icone.rs` (spina, motore come la spia MIL, quadrante,
+  forma d'onda, cartella, cursori), stesso tratto da 1,75 px su 22 px: il
+  carattere di egui non ha i simboli necessari. La barra laterale è larga
+  184 px, con il nome dell'app in cima; la voce corrente ha fondo velato e
+  una barretta in `accento`. La barra in basso è alta 64 px, sei voci uguali
+  (60 px ciascuna a 360 px), la corrente con una pillola velata dietro
+  l'icona.
+- **Nomi brevi** in basso: *Collega* e *Opzioni* al posto di «Connessione» e
+  «Impostazioni», che a 12 px non entrano in 60 px.
+- La **barra di stato** porta anche il titolo della pagina (19 px), utile su
+  telefono dove la barra in basso non lo scrive per intero. Sullo stretto mostra
+  collegamento e registrazione in forma breve («REC 03:12») e MQTT solo se
+  avanza posto. Gli stati sono un pallino colorato più il testo, senza glifi.
+- La **soglia** di 900 px vale sulla larghezza della finestra (non dell'area
+  del contenuto), così barra laterale e contenuto cambiano insieme. Il
+  cruscotto continua a decidere 12 o 4 colonne sulla propria larghezza
+  disponibile. Sul layout stretto tutto lo stile passa a bersagli da 44 px
+  (`tema::adatta`); finestra minima 360 × 560.
+- **Sensori** sullo stretto: controllo segmentato «Elenco | Grafici»; lettura,
+  registrazione e marcatori sono una striscia di tre pulsanti uguali sopra
+  entrambe le viste (anche sul largo, in cima all'elenco), con i marcatori in
+  un menu. **Sessioni** sullo stretto: elenco, poi dettaglio con «Tutte le
+  sessioni». **Diagnosi** sullo stretto: codici come schede, fermo immagine e
+  monitor come righe etichetta/valore, e *Cancella codici guasto…* in un
+  riquadro rosso in fondo alla pagina, non nella barra delle azioni.
+- In tutte le pagine i gruppi sono **schede** (`superficie`, bordo 1 px,
+  raggio 8 px, margine 16 px) con titolo da 19 px; i separatori orizzontali
+  sono rimasti solo fra le voci di una lista. Le aree vuote dicono che cosa
+  fare e, quando serve, offrono il pulsante («Vai a Connessione», «Avvia
+  lettura», «Importa…»).
+- **Barra di trasporto** sullo stretto: una riga di pulsanti-icona da 44 px
+  (riproduci/pausa, marcatore precedente e successivo, velocità in una casella
+  a discesa, «Ripeti» come interruttore, chiudi) e sotto tempo e cursore.
+- Le finestre modali hanno al più la larghezza dello schermo meno 12 px per
+  lato; la parte lunga del testo scorre, titolo e pulsanti restano fermi.
+  Sullo stretto i pulsanti sono impilati a tutta larghezza.
+- La **chiusura dell'app** con il cruscotto non salvato chiede
+  *Salva / Non salvare / Annulla*. **Ctrl+1…6** cambiano pagina.
+- `tema::riserva_superiore()` restituisce lo spazio da lasciare in cima per
+  la barra di stato di Android: oggi 0, perché winit non comunica gli
+  «insets» dell'area sicura.
+
 ## 3. Strumenti del cruscotto
 
 Ogni strumento mostra **un** parametro. Tipi:

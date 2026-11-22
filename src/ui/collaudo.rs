@@ -1,7 +1,9 @@
 //! Collaudo automatico dell'interfaccia in demo (solo sviluppo, feature
 //! `collaudo`): con la variabile d'ambiente `OBDIO_COLLAUDO=<cartella>` l'app
-//! percorre da sola il flusso demo e salva una schermata per ogni passo.
+//! percorre da sola il flusso demo e salva le schermate di ogni destinazione,
+//! larga (1280 × 820, `largo_*.png`) e da telefono (390 × 844, `stretto_*.png`).
 
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::PathBuf;
@@ -10,7 +12,8 @@ use std::time::Instant;
 use eframe::egui;
 
 use super::cruscotto::modello::{Cella, Pagina, SPIA_MIL, Soglia, Strumento, TipoStrumento};
-use super::{App, Scheda, VistaSensori};
+use super::sessioni::AzioneSessioni;
+use super::{App, PannelloSensori, Scheda, VistaSensori};
 use crate::elm::ConfermaCancellazione;
 use crate::obd::pids;
 use crate::recording;
@@ -74,11 +77,27 @@ fn sonda_a_valle_muta(app: &App) -> bool {
         .is_some_and(|p| p.v.is_none())
 }
 
+/// Misure della finestra per le schermate: larga e da telefono.
+const LARGO: [f32; 2] = [1280.0, 820.0];
+const STRETTO: [f32; 2] = [390.0, 844.0];
+
+/// Azioni in coda fra un passo e l'altro.
+enum Azione {
+    /// Schermata con questo nome.
+    Scatta(String),
+    /// Cambia la misura interna della finestra.
+    Misura([f32; 2]),
+    /// Attende che il layout si assesti.
+    Attendi(f32),
+}
+
 pub struct Collaudo {
     cartella: PathBuf,
     fase: u32,
     da: Instant,
     scatto: Option<String>,
+    coda: VecDeque<Azione>,
+    attesa: Instant,
 }
 
 impl Collaudo {
@@ -90,6 +109,8 @@ impl Collaudo {
             fase: 0,
             da: Instant::now(),
             scatto: None,
+            coda: VecDeque::new(),
+            attesa: Instant::now(),
         })
     }
 
@@ -100,6 +121,28 @@ impl Collaudo {
 
     fn secondi(&self) -> f32 {
         self.da.elapsed().as_secs_f32()
+    }
+
+    /// Una schermata nella misura corrente (larga).
+    fn scatta(&mut self, nome: &str) {
+        self.coda.push_back(Azione::Scatta(nome.to_string()));
+    }
+
+    /// Solo la misura da telefono, poi di nuovo larga.
+    fn stretto(&mut self, nome: &str) {
+        self.coda.extend([
+            Azione::Misura(STRETTO),
+            Azione::Attendi(1.2),
+            Azione::Scatta(format!("stretto_{nome}")),
+            Azione::Misura(LARGO),
+            Azione::Attendi(1.0),
+        ]);
+    }
+
+    /// La stessa vista larga e da telefono.
+    fn doppio(&mut self, nome: &str) {
+        self.scatta(&format!("largo_{nome}"));
+        self.stretto(nome);
     }
 }
 
@@ -112,12 +155,9 @@ fn salva(percorso: &std::path::Path, img: &egui::ColorImage) -> Result<(), Strin
     w.write_image_data(img.as_raw()).map_err(|e| e.to_string())
 }
 
-pub fn passo(app: &mut App, ctx: &egui::Context) {
-    let Some(mut c) = app.collaudo.take() else {
-        return;
-    };
-    ctx.request_repaint_after(std::time::Duration::from_millis(100));
-
+/// Esegue la coda delle azioni; `true` finché c'è qualcosa in corso. Svuotata
+/// la coda, il collaudo passa al passo successivo.
+fn esegui_coda(c: &mut Collaudo, ctx: &egui::Context) -> bool {
     // Schermata richiesta in un fotogramma precedente.
     if let Some(nome) = c.scatto.clone() {
         let immagine = ctx.input(|i| {
@@ -132,18 +172,52 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
                 eprintln!("collaudo: schermata non salvata: {e}");
             }
             c.scatto = None;
-            c.avanti();
+            c.attesa = Instant::now();
+            if c.coda.is_empty() {
+                c.avanti();
+            }
         }
+        return true;
+    }
+    let Some(azione) = c.coda.front() else {
+        return false;
+    };
+    match azione {
+        Azione::Scatta(nome) => {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            c.scatto = Some(nome.clone());
+            c.coda.pop_front();
+        }
+        Azione::Misura(m) => {
+            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(m[0], m[1])));
+            c.coda.pop_front();
+            c.attesa = Instant::now();
+        }
+        Azione::Attendi(s) => {
+            if c.attesa.elapsed().as_secs_f32() > *s {
+                c.coda.pop_front();
+                c.attesa = Instant::now();
+                if c.coda.is_empty() {
+                    c.avanti();
+                }
+            }
+        }
+    }
+    true
+}
+
+pub fn passo(app: &mut App, ctx: &egui::Context) {
+    let Some(mut c) = app.collaudo.take() else {
+        return;
+    };
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    if esegui_coda(&mut c, ctx) {
         app.collaudo = Some(c);
         return;
     }
-    let scatta = |c: &mut Collaudo, nome: &str| {
-        ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
-        c.scatto = Some(nome.to_string());
-    };
 
     match c.fase {
-        0 if c.secondi() > 1.0 => scatta(&mut c, "0_connessione"),
+        0 if c.secondi() > 1.0 => c.doppio("connessione"),
         1 => {
             app.invia(Comando::Collega(Sorgente::Demo));
             c.avanti();
@@ -153,14 +227,16 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             app.scheda = Scheda::Diagnosi;
             c.avanti();
         }
-        3 if app.diagnosi.is_some() && c.secondi() > 0.8 => scatta(&mut c, "1_diagnosi"),
+        3 if app.diagnosi.is_some() && c.secondi() > 0.8 => c.doppio("diagnosi"),
         4 => {
-            app.scorri_diagnosi = Some(520.0);
+            app.scorri_diagnosi = Some(250.0);
             c.avanti();
         }
-        5 if c.secondi() > 0.6 => scatta(&mut c, "2_fermo_immagine"),
+        5 if c.secondi() > 0.6 => c.scatta("largo_fermo_immagine"),
         6 => {
+            app.scorri_diagnosi = Some(0.0);
             app.scheda = Scheda::Sensori;
+            app.pannello_sensori = PannelloSensori::Elenco;
             // Oltre al preset P0420 (7 parametri): altri 9 sensori reali del
             // simulatore e la distanza parziale calcolata.
             for k in [
@@ -191,80 +267,108 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             c.avanti();
         }
         // Oltre il secondo 50 la demo ha simulato un'interruzione della sonda a valle.
-        9 if app.live.t_max > 56.0 => scatta(&mut c, "3_tempo_reale"),
-        // Un grafico per sensore: dieci sensori selezionati, in cima e poi in fondo.
+        9 if app.live.t_max > 56.0 => c.doppio("sensori"),
         10 => {
+            app.pannello_sensori = PannelloSensori::Grafici;
+            c.stretto("sensori_grafici");
+        }
+        // Un grafico per sensore: diciassette sensori selezionati, in cima e poi in fondo.
+        11 => {
             app.vista = VistaSensori::PerSensore;
             c.avanti();
         }
-        11 if c.secondi() > 1.0 => scatta(&mut c, "3b_un_grafico_per_sensore"),
-        12 => {
+        12 if c.secondi() > 1.0 => c.doppio("sensori_per_sensore"),
+        13 => {
             app.scorri_sensori = Some(10_000.0);
             c.avanti();
         }
-        13 if c.secondi() > 0.8 => scatta(&mut c, "3c_un_grafico_per_sensore_in_fondo"),
-        14 => {
+        14 if c.secondi() > 0.8 => c.scatta("largo_sensori_per_sensore_in_fondo"),
+        15 => {
             app.vista = VistaSensori::Confronto;
+            app.pannello_sensori = PannelloSensori::Elenco;
             app.invia(Comando::FermaRegistrazione);
             c.avanti();
         }
-        15 if app.ultima.is_some() && c.secondi() > 0.5 => scatta(&mut c, "4_sessione_salvata"),
-        16 => {
+        16 if app.ultima.is_some() && c.secondi() > 0.5 => {
+            c.scatta("largo_sensori_sessione_salvata")
+        }
+        17 => {
             if let Some(u) = &app.ultima {
                 app.apri_sessione(u.percorso.clone());
             }
+            app.sessioni.dettaglio = true;
             app.scheda = Scheda::Sessioni;
             c.avanti();
         }
-        17 if app.aperta.is_some() && c.secondi() > 0.8 => scatta(&mut c, "5_sessione_riaperta"),
-        18 => {
+        18 if app.aperta.is_some() && c.secondi() > 0.8 => c.doppio("sessioni"),
+        19 => {
+            app.sessioni.dettaglio = false;
+            c.stretto("sessioni_elenco");
+        }
+        20 => {
             app.scheda = Scheda::Connessione;
             c.avanti();
         }
-        19 if c.secondi() > 0.5 => scatta(&mut c, "6_collegato"),
-        // Cancellazione dei codici sul simulatore: conferma, poi esito.
-        20 => {
+        21 if c.secondi() > 0.5 => c.doppio("connessione_collegato"),
+        // Sullo stretto il pulsante di cancellazione sta in fondo alla diagnosi:
+        // prima si restringe la finestra, poi si scorre.
+        22 => {
             app.scheda = Scheda::Diagnosi;
+            c.coda
+                .extend([Azione::Misura(STRETTO), Azione::Attendi(1.2)]);
+        }
+        23 => {
+            app.scorri_diagnosi = Some(10_000.0);
+            c.coda.extend([
+                Azione::Attendi(0.8),
+                Azione::Scatta("stretto_diagnosi_in_fondo".into()),
+                Azione::Misura(LARGO),
+                Azione::Attendi(1.0),
+            ]);
+        }
+        // Cancellazione dei codici sul simulatore: conferma, poi esito.
+        24 => {
+            app.scorri_diagnosi = Some(0.0);
             app.conferma_cancellazione = Some(true);
             c.avanti();
         }
-        21 if c.secondi() > 0.6 => scatta(&mut c, "7_conferma_cancellazione"),
-        22 => {
+        25 if c.secondi() > 0.6 => c.doppio("conferma_cancellazione"),
+        26 => {
             app.conferma_cancellazione = None;
             app.invia(Comando::CancellaDtc(
                 ConfermaCancellazione::utente_ha_confermato(),
             ));
             c.avanti();
         }
-        23 if app.esito_cancellazione.is_some()
+        27 if app.esito_cancellazione.is_some()
             && app.pronto()
             && app.diagnosi.as_ref().is_some_and(|d| !d.fermo.presente)
             && c.secondi() > 0.8 =>
         {
-            scatta(&mut c, "8_esito_cancellazione")
+            c.doppio("esito_cancellazione")
         }
-        24 => {
+        28 => {
             app.invia(Comando::Scollega);
             c.avanti();
         }
         // Cruscotto: nuovo collegamento demo a metà ciclo (velocità > 0).
-        25 if !app.collegato() && c.secondi() > 0.5 => {
+        29 if !app.collegato() && c.secondi() > 0.5 => {
             app.invia(Comando::Collega(Sorgente::Trasporto(Box::new(
                 DemoTransport::new().con_fase(FASE_CRUSCOTTO_S),
             ))));
             c.avanti();
         }
-        26 if app.pronto() => {
+        30 if app.pronto() => {
             app.invia(Comando::LeggiDiagnosi);
             c.avanti();
         }
         // Aprendo il cruscotto la lettura parte da sola.
-        27 if app.diagnosi.is_some() && app.pronto() => {
+        31 if app.diagnosi.is_some() && app.pronto() => {
             app.cruscotto.pagina = 0;
             app.scheda = Scheda::Cruscotto;
             c.avanti();
         }
-        28 if app.polling
+        32 if app.polling
             && app.live.t_max > 22.0
             && app
                 .live
@@ -272,14 +376,14 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
                 .and_then(|p| p.v)
                 .is_some_and(|v| v > 30.0) =>
         {
-            scatta(&mut c, "9_cruscotto_guida")
+            c.doppio("cruscotto_guida")
         }
-        29 => {
+        33 => {
             app.cruscotto.pagina = 2;
             c.avanti();
         }
-        30 if c.secondi() > 7.0 => scatta(&mut c, "10_cruscotto_p0420"),
-        31 => {
+        34 if c.secondi() > 7.0 => c.doppio("cruscotto_p0420"),
+        35 => {
             app.cruscotto.pagina = 0;
             app.cruscotto.modifica = true;
             app.cruscotto.selezionato = app.cruscotto.correnti.pagine[0]
@@ -298,8 +402,16 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             }
             c.avanti();
         }
-        32 if c.secondi() > 1.0 => scatta(&mut c, "11_cruscotto_modifica"),
-        33 => {
+        36 if c.secondi() > 1.0 => c.doppio("cruscotto_modifica"),
+        // Chiusura della finestra con il cruscotto non salvato: l'app la
+        // intercetta e chiede che cosa fare.
+        37 => {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            c.avanti();
+        }
+        38 if app.chiedi_chiusura && c.secondi() > 0.6 => c.doppio("chiusura_non_salvato"),
+        39 => {
+            app.chiedi_chiusura = false;
             app.cruscotto.annulla();
             let id = app.cruscotto.correnti.nuovo_id();
             app.cruscotto.correnti.pagine.push(pagina_prova(id));
@@ -307,49 +419,23 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             c.avanti();
         }
         // Attende che la sonda a valle smetta di rispondere (stato mancante).
-        34 if c.secondi() > 2.0 && sonda_a_valle_muta(app) => c.avanti(),
-        35 if c.secondi() > 0.9 => scatta(&mut c, "12_cruscotto_strumenti"),
-        // Layout stretto: finestra da telefono.
-        36 => {
-            app.cruscotto.pagina = 0;
-            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(
-                360.0, 560.0,
-            )));
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(420.0, 820.0)));
-            c.avanti();
-        }
-        37 if c.secondi() > 2.0 => scatta(&mut c, "13_cruscotto_stretto"),
-        38 => {
-            app.cruscotto.modifica = true;
-            app.cruscotto.selezionato = app.cruscotto.correnti.pagine[0]
-                .strumenti
-                .first()
-                .map(|s| s.id);
-            c.avanti();
-        }
-        39 if c.secondi() > 1.0 => scatta(&mut c, "14_cruscotto_stretto_modifica"),
-        40 => {
+        40 if c.secondi() > 2.0 && sonda_a_valle_muta(app) => c.avanti(),
+        41 if c.secondi() > 0.9 => c.doppio("cruscotto_strumenti"),
+        42 => {
             app.cruscotto.annulla();
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1280.0, 820.0)));
-            ctx.send_viewport_cmd(egui::ViewportCommand::MinInnerSize(egui::vec2(
-                980.0, 620.0,
-            )));
             // Lasciando il cruscotto la lettura avviata da lui si ferma.
             app.scheda = Scheda::Sensori;
             c.avanti();
         }
-        41 if c.secondi() > 1.5 => {
+        43 if c.secondi() > 1.5 => {
             if app.polling {
                 eprintln!("collaudo: la lettura avviata dal cruscotto non si è fermata");
             }
-            scatta(&mut c, "15_dopo_il_cruscotto")
-        }
-        42 => {
             app.invia(Comando::Scollega);
             c.avanti();
         }
         // Impostazioni, con valori d'esempio (nulla viene salvato né applicato).
-        43 if !app.collegato() && c.secondi() > 0.5 => {
+        44 if !app.collegato() && c.secondi() > 0.5 => {
             let f = &mut app.impostazioni.form;
             f.attivo = true;
             f.host = "192.168.1.10".into();
@@ -360,10 +446,17 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             app.scheda = Scheda::Impostazioni;
             c.avanti();
         }
-        44 if c.secondi() > 0.6 => scatta(&mut c, "9_impostazioni"),
-        // Esportazione della sessione demo registrata in CSV stile Torque.
-        45 => {
+        45 if c.secondi() > 0.6 => c.doppio("impostazioni"),
+        // Finestra di scelta del file (importazione).
+        46 => {
             app.scheda = Scheda::Sessioni;
+            app.apri_scelta_sessioni(AzioneSessioni::Importa);
+            c.avanti();
+        }
+        47 if c.secondi() > 0.6 => c.doppio("scelta_file"),
+        // Esportazione della sessione demo registrata in CSV stile Torque.
+        48 => {
+            app.sessioni.dialogo = None;
             let torque = c.cartella.join("sessione_demo_torque.csv");
             app.esporta_sessione(FormatoEsportazione::CsvTorque, &torque);
             if app
@@ -377,25 +470,26 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             c.avanti();
         }
         // Reimportazione dello stesso file: anteprima con il riepilogo.
-        46 if c.secondi() > 0.5 => {
+        49 if c.secondi() > 0.5 => {
             app.importa_da(c.cartella.join("sessione_demo_torque.csv"));
             c.avanti();
         }
-        47 if app.sessioni.anteprima.is_some() && c.secondi() > 0.8 => {
-            scatta(&mut c, "16_importazione_anteprima")
+        50 if app.sessioni.anteprima.is_some() && c.secondi() > 0.8 => {
+            c.doppio("importazione_anteprima")
         }
-        48 => {
+        51 => {
             app.conferma_importazione();
+            app.sessioni.dettaglio = true;
             c.avanti();
         }
-        49 if c.secondi() > 1.0 => {
+        52 if c.secondi() > 1.0 => {
             if app.aperta.as_ref().is_none_or(|s| s.riepilogo.is_none()) {
                 eprintln!("collaudo: la sessione importata non è stata aperta");
             }
-            scatta(&mut c, "17_sessione_importata")
+            c.doppio("sessione_importata")
         }
         // Riproduzione della sessione demo con il cruscotto «Guida».
-        50 => {
+        53 => {
             match app.ultima.as_ref().map(|u| recording::carica(&u.percorso)) {
                 Some(Ok(dati)) => {
                     app.cruscotto.pagina = 0;
@@ -406,14 +500,14 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             c.avanti();
         }
         // Verso la fine del minimo: poco dopo la velocità sale.
-        51 if app.riproduzione.is_some() && c.secondi() > 0.5 => {
+        54 if app.riproduzione.is_some() && c.secondi() > 0.5 => {
             app.invia(Comando::Riproduzione(ComandoRiproduzione::VaiA(40.0)));
             app.invia(Comando::Riproduzione(ComandoRiproduzione::Velocita(2.0)));
             c.avanti();
         }
-        52 if c.secondi() > 2.6 => scatta(&mut c, "18_riproduzione_guida"),
+        55 if c.secondi() > 2.6 => c.doppio("riproduzione_guida"),
         // Salto al marcatore «2.500 giri» e pausa.
-        53 => {
+        56 => {
             let t = app.riproduzione.as_ref().and_then(|r| {
                 r.marcatori
                     .iter()
@@ -426,20 +520,21 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             }
             c.avanti();
         }
-        54 if c.secondi() > 1.5 => {
+        57 if c.secondi() > 1.5 => {
             app.invia(Comando::Riproduzione(ComandoRiproduzione::Pausa));
             app.scheda = Scheda::Sensori;
             app.vista = VistaSensori::PerSensore;
+            app.pannello_sensori = PannelloSensori::Grafici;
             app.scorri_sensori = Some(0.0);
             c.avanti();
         }
-        55 if c.secondi() > 1.0 => scatta(&mut c, "19_riproduzione_sensori_in_pausa"),
-        56 => {
+        58 if c.secondi() > 1.0 => c.doppio("riproduzione_sensori_in_pausa"),
+        59 => {
             app.vista = VistaSensori::Confronto;
             app.invia(Comando::Scollega);
             c.avanti();
         }
-        57 if !app.collegato() && c.secondi() > 0.5 => {
+        60 if !app.collegato() && c.secondi() > 0.5 => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             c.avanti();
         }

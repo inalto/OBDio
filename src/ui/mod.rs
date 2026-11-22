@@ -12,7 +12,6 @@ use crate::diagnosis::DiagnosisReport;
 use crate::model::Stato;
 use crate::obd::pids::PresetP0420;
 use crate::recording::{self, SessionData};
-use crate::riproduzione::data_leggibile;
 use crate::scambio;
 use crate::transport::ble::{BleDispositivo, GattInfo};
 use crate::transport::serial::PortaSeriale;
@@ -23,10 +22,13 @@ use crate::worker::{
 
 #[cfg(feature = "collaudo")]
 mod collaudo;
+mod componenti;
 mod cruscotto;
 pub mod dati;
 mod grafici;
+mod icone;
 mod impostazioni;
+mod navigazione;
 mod pagine;
 pub(crate) mod scelta_file;
 mod sensori;
@@ -35,12 +37,10 @@ pub(crate) mod tema;
 mod trasporto;
 
 use dati::Archivio;
-pub(crate) use sensori::VistaSensori;
+pub(crate) use sensori::{PannelloSensori, VistaSensori};
 
 // Nomi storici dei colori, ora alias dei token di `tema` (unica fonte).
-pub(crate) use tema::{
-    ATTENZIONE as GIALLO, DEMO as ARANCIO_DEMO, OK as VERDE, PERICOLO as ROSSO, TESTO_2 as GRIGIO,
-};
+pub(crate) use tema::{ATTENZIONE as GIALLO, OK as VERDE, PERICOLO as ROSSO, TESTO_2 as GRIGIO};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Scheda {
@@ -95,6 +95,12 @@ pub struct App {
     lavoro: Option<JoinHandle<()>>,
     pub(crate) cartella: PathBuf,
     pub(crate) scheda: Scheda,
+    /// Disposizione del fotogramma corrente (larga o stretta).
+    pub(crate) disposizione: tema::Disposizione,
+    /// Finestra «Salvare le modifiche al cruscotto?» aperta.
+    pub(crate) chiedi_chiusura: bool,
+    /// L'utente ha scelto di chiudere: la prossima richiesta passa.
+    pub(crate) chiusura_confermata: bool,
     pub(crate) stato: StatoConn,
     pub(crate) info: Option<InfoConn>,
     pub(crate) errore: Option<ErroreUtente>,
@@ -129,6 +135,8 @@ pub struct App {
     /// Testo del campo di ricerca nell'elenco dei sensori.
     pub(crate) ricerca: String,
     pub(crate) vista: VistaSensori,
+    /// Elenco o grafici, sul layout stretto.
+    pub(crate) pannello_sensori: PannelloSensori,
     /// Scorrimento da applicare una volta alla griglia dei grafici per sensore.
     pub(crate) scorri_sensori: Option<f32>,
     pub(crate) polling: bool,
@@ -167,7 +175,7 @@ pub fn esegui() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("OBDio — Diagnostica OBD-II")
             .with_inner_size([1280.0, 820.0])
-            .with_min_inner_size([980.0, 620.0]),
+            .with_min_inner_size(tema::FINESTRA_MIN),
         ..Default::default()
     };
     eframe::run_native("OBDio", opzioni, Box::new(|cc| Ok(Box::new(App::new(cc)))))
@@ -191,6 +199,9 @@ impl App {
             elenco: recording::elenca(&cartella),
             cartella,
             scheda: Scheda::Connessione,
+            disposizione: tema::Disposizione::Larga,
+            chiedi_chiusura: false,
+            chiusura_confermata: false,
             stato: StatoConn::Scollegato,
             info: None,
             errore: None,
@@ -213,6 +224,7 @@ impl App {
             selezione: BTreeMap::new(),
             ricerca: String::new(),
             vista: VistaSensori::Confronto,
+            pannello_sensori: PannelloSensori::Elenco,
             scorri_sensori: None,
             polling: false,
             registrazione: None,
@@ -428,148 +440,6 @@ impl App {
         }
         self.ricevi_importazione();
     }
-
-    fn testo_stato(&self) -> (String, Color32) {
-        match &self.stato {
-            StatoConn::Scollegato => ("Non collegato".into(), GRIGIO),
-            StatoConn::Scansione => ("Scansione Bluetooth in corso…".into(), GIALLO),
-            StatoConn::Connessione(fase) => (fase.clone(), GIALLO),
-            StatoConn::Connesso if self.in_riproduzione() => {
-                let testo = match &self.riproduzione {
-                    Some(r) if r.finita => "Riproduzione finita",
-                    Some(r) if r.in_pausa => "Riproduzione in pausa",
-                    _ => "Riproduzione in corso",
-                };
-                (testo.into(), ARANCIO_DEMO)
-            }
-            StatoConn::Connesso => ("Collegato".into(), VERDE),
-            StatoConn::Diagnosi => ("Lettura della diagnosi in corso…".into(), GIALLO),
-            StatoConn::Cancellazione => ("Cancellazione dei codici guasto in corso…".into(), ROSSO),
-            StatoConn::Disconnessione => ("Disconnessione in corso…".into(), GIALLO),
-        }
-    }
-
-    fn barra_superiore(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.heading("OBDio");
-            ui.separator();
-            for (scheda, nome) in [
-                (Scheda::Connessione, "Connessione"),
-                (Scheda::Diagnosi, "Codici guasto e fermo immagine"),
-                (Scheda::Cruscotto, "Cruscotto"),
-                (Scheda::Sensori, "Sensori"),
-                (Scheda::Sessioni, "Sessioni salvate"),
-                (Scheda::Impostazioni, "Impostazioni"),
-            ] {
-                ui.selectable_value(&mut self.scheda, scheda, nome);
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let (testo, colore) = self.testo_stato();
-                ui.label(RichText::new(testo).color(colore).strong());
-                if let Some(r) = &self.registrazione {
-                    let s = (self.live.t_max - r.t_inizio).max(0.0) as u64;
-                    ui.label(
-                        RichText::new(format!(
-                            "REGISTRAZIONE IN CORSO {:02}:{:02}",
-                            s / 60,
-                            s % 60
-                        ))
-                        .color(ROSSO)
-                        .strong(),
-                    );
-                } else if self.polling {
-                    ui.label(RichText::new("Lettura dati attiva").color(VERDE));
-                }
-                if let Some((testo, colore)) = self.impostazioni.testo_barra() {
-                    ui.label(RichText::new(testo).color(colore));
-                }
-            });
-        });
-        ui.add_space(2.0);
-
-        let demo_in_vista = match self.scheda {
-            Scheda::Sessioni => self
-                .aperta
-                .as_ref()
-                .is_some_and(|s| s.dati.intestazione.demo),
-            Scheda::Sensori | Scheda::Cruscotto => {
-                self.info.as_ref().is_some_and(|i| i.demo)
-                    || (self.live_demo && !self.live.serie.is_empty())
-            }
-            Scheda::Diagnosi => {
-                self.info.as_ref().is_some_and(|i| i.demo)
-                    || self.diagnosi.as_ref().is_some_and(|d| d.demo)
-            }
-            Scheda::Connessione => self.info.as_ref().is_some_and(|i| i.demo),
-            Scheda::Impostazioni => false,
-        };
-        if let Some(r) = self.info.as_ref().and_then(|i| i.riproduzione.clone()) {
-            // Per tutta la durata della riproduzione, su ogni pagina.
-            egui::Frame::new()
-                .fill(ARANCIO_DEMO)
-                .inner_margin(egui::Margin::symmetric(10, 5))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new(format!(
-                                "RIPRODUZIONE — dati registrati il {}{}",
-                                data_leggibile(&r.registrata_il),
-                                if r.sessione_demo {
-                                    ", sessione demo"
-                                } else {
-                                    ""
-                                }
-                            ))
-                            .color(Color32::BLACK)
-                            .strong(),
-                        );
-                        ui.label(
-                            RichText::new(format!(
-                                "· non sono letture attuali · {}",
-                                r.importata
-                                    .clone()
-                                    .map(|i| format!("importata: {i}"))
-                                    .unwrap_or_else(|| r.file.clone())
-                            ))
-                            .color(Color32::BLACK),
-                        );
-                    });
-                });
-            self.barra_trasporto(ui);
-        } else if demo_in_vista {
-            egui::Frame::new()
-                .fill(ARANCIO_DEMO)
-                .inner_margin(egui::Margin::symmetric(10, 5))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.label(
-                        RichText::new(
-                            "MODALITÀ DEMO — tutti i dati sono simulati; i segnali delle sonde \
-                             lambda sono sintetici e non provengono da un veicolo",
-                        )
-                        .color(Color32::BLACK)
-                        .strong(),
-                    );
-                });
-        }
-        if let Some(e) = self.errore.clone() {
-            egui::Frame::new()
-                .fill(Color32::from_rgb(90, 25, 25))
-                .inner_margin(egui::Margin::symmetric(10, 6))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new(e.titolo()).strong().color(Color32::WHITE));
-                        ui.label(RichText::new(e.messaggio()).color(Color32::WHITE));
-                        if ui.button("Chiudi").clicked() {
-                            self.errore = None;
-                        }
-                    });
-                });
-        }
-    }
 }
 
 /// Colore associato allo stato di una lettura.
@@ -602,20 +472,70 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         #[cfg(feature = "collaudo")]
         collaudo::passo(self, ui.ctx());
-        self.governa_polling_cruscotto();
-        egui::Panel::top("barra").show(ui, |ui| self.barra_superiore(ui));
-        egui::CentralPanel::default().show(ui, |ui| match self.scheda {
-            Scheda::Connessione => self.pagina_connessione(ui),
-            Scheda::Diagnosi => self.pagina_diagnosi(ui),
-            Scheda::Cruscotto => self.pagina_cruscotto(ui),
-            Scheda::Sensori => self.pagina_sensori(ui),
-            Scheda::Sessioni => self.pagina_sessioni(ui),
-            Scheda::Impostazioni => self.pagina_impostazioni(ui),
-        });
-        // Sopra a tutto, qualunque sia la scheda.
         let ctx = ui.ctx().clone();
+        let d = tema::Disposizione::per_larghezza(ctx.content_rect().width());
+        self.disposizione = d;
+        if tema::adatta(&ctx, d) {
+            ctx.request_repaint();
+        }
+        // Lo stile del contesto vale dal prossimo fotogramma: questo lo adegua subito.
+        ui.spacing_mut().interact_size.y = d.bersaglio();
+        self.scorciatoie(&ctx);
+        self.governa_polling_cruscotto();
+
+        let barra_nav = egui::Frame::new()
+            .fill(tema::SUPERFICIE)
+            .inner_margin(egui::Margin::same(tema::SP_2 as i8));
+        if d.stretta() {
+            egui::Panel::bottom("navigazione")
+                .resizable(false)
+                .exact_size(tema::ALTEZZA_BARRA_NAV)
+                .frame(barra_nav.inner_margin(egui::Margin::ZERO))
+                .show(ui, |ui| self.barra_inferiore(ui));
+        } else {
+            egui::Panel::left("navigazione")
+                .resizable(false)
+                .exact_size(tema::LARGHEZZA_BARRA_LATERALE)
+                .frame(barra_nav)
+                .show(ui, |ui| self.barra_laterale(ui));
+        }
+        let margine = d.margine() as i8;
+        egui::Panel::top("barra")
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(tema::SFONDO)
+                    .inner_margin(egui::Margin {
+                        left: margine,
+                        right: margine,
+                        top: 0,
+                        bottom: 0,
+                    }),
+            )
+            .show(ui, |ui| self.barra_superiore(ui));
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(tema::SFONDO)
+                    .inner_margin(egui::Margin {
+                        left: margine,
+                        right: margine,
+                        top: tema::SP_3 as i8,
+                        bottom: 0,
+                    }),
+            )
+            .show(ui, |ui| match self.scheda {
+                Scheda::Connessione => self.pagina_connessione(ui),
+                Scheda::Diagnosi => self.pagina_diagnosi(ui),
+                Scheda::Cruscotto => self.pagina_cruscotto(ui),
+                Scheda::Sensori => self.pagina_sensori(ui),
+                Scheda::Sessioni => self.pagina_sessioni(ui),
+                Scheda::Impostazioni => self.pagina_impostazioni(ui),
+            });
+        // Sopra a tutto, qualunque sia la scheda.
         self.finestra_cancellazione(&ctx);
         self.finestre_sessioni(&ctx);
+        self.governa_chiusura(&ctx);
     }
 }
 

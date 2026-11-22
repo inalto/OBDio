@@ -34,7 +34,7 @@ superati, il collaudo automatico dell'interfaccia in demo e un commit.
 | 3 | **Cruscotto** personalizzabile: tema e token, sette tipi di strumento, griglia, modo modifica, ispettore, pagine, modelli pronti, salvataggio, import/export dei cruscotti | Opus | fatto |
 | 4 | Importazione ed esportazione dei dati (sessione, CSV OBDio, CSV in formato Torque, diagnosi JSON) e **riproduzione** in tempo reale con pausa, posizione e velocità | Opus | fatto |
 | 5 | Pubblicazione **MQTT** in tempo reale: impostazioni, stato in linea/non in linea, un argomento per sensore più uno JSON cumulativo, discovery per Home Assistant | Sonnet | fatto |
-| 6 | Rifinitura: navigazione a sei destinazioni, layout stretto per telefono, barra di stato, pagina Impostazioni | Opus | |
+| 6 | Rifinitura: navigazione a sei destinazioni, layout stretto per telefono, barra di stato, pagina Impostazioni | Opus | fatto |
 | 7 | Base Android (libreria `cdylib`, funzioni desktop dietro `cfg`), guida alla compilazione, README, pacchetto Windows | Haiku (documenti), Sonnet (codice) | |
 
 ### Fase 1 — Codici: descrizioni e cancellazione
@@ -111,6 +111,17 @@ OBDio o a mano) e il trascinamento del cursore col mouse.
 ### Fase 6 — Rifinitura e telefono
 
 Vedi DESIGN.md, sezioni 1 e 2.
+
+Fatto: barra laterale (largo) o in basso (stretto) con icone disegnate
+(`src/ui/navigazione.rs`, `src/ui/icone.rs`), barra di stato con titolo,
+collegamento, registrazione e MQTT, elementi comuni in `src/ui/componenti.rs`
+(schede, pulsanti per ruolo, righe etichetta/valore, stati vuoti). Finestra
+minima 360 × 560; ogni pagina ha un layout stretto (vedi DESIGN.md, nota della
+sezione 2). Ctrl+1…6, conferma della chiusura con il cruscotto non salvato,
+`tema::riserva_superiore()` per Android. Il collaudo fotografa ogni pagina a
+1280 × 820 e a 390 × 844 (`largo_*.png`, `stretto_*.png`); schermate scelte in
+`docs/schermate/`. Non verificato: tocco su un telefono vero, gesti col dito,
+scorciatoie premute a mano.
 
 ### Fase 7 — Android
 
