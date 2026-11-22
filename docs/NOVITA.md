@@ -68,3 +68,10 @@ nel README, in [Stato delle verifiche](../README.md#stato-delle-verifiche).
   i sistemi.
 - Non è stato costruito alcun APK e il codice Android non è mai stato
   compilato: vedi [ANDROID.md](ANDROID.md).
+
+## Finestre di sistema per i file
+
+- Importa ed esporta (sessioni e cruscotti) aprono la finestra di sistema per
+  aprire e salvare, con filtri in italiano e l'ultima cartella ricordata per
+  ogni scopo; la finestra gira in un thread a parte e l'app non si ferma. Su
+  Android resta la finestra interna. Non ancora provata a mano.

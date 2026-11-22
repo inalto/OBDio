@@ -855,7 +855,7 @@ impl App {
                 if componenti::pulsante(
                     ui,
                     pieno,
-                    libero,
+                    libero && !crate::ui::scelta_file::occupato(),
                     egui::Button::new("Riproduci una sessione…"),
                 )
                 .clicked()

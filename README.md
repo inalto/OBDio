@@ -287,7 +287,9 @@ Dal menu **Importa / esporta** si salva in JSON la pagina visibile o l'intero
 insieme, e si importa un file esportato (una pagina o tutto): le pagine
 importate si aggiungono alle esistenti e restano da salvare. Un file non
 valido viene rifiutato con il motivo, senza cambiare nulla. La finestra
-chiede il percorso del file e propone l'elenco dei JSON della cartella.
+apre la finestra di sistema per scegliere il file da importare o dove
+salvare quello esportato (su Android, dove non esiste, la finestra interna con
+il percorso e l'elenco dei JSON della cartella).
 
 I cruscotti stanno in `configurazione\cruscotti.json` accanto
 all'eseguibile (oppure in `Documenti\OBDio\configurazione` se quella cartella
@@ -377,10 +379,18 @@ Nella scheda **Sessioni**:
   delle sessioni un file `…_IMPORTATA_<nome del file>.obdio.jsonl`; il file
   d'origine non viene toccato.
 
-La scelta del file avviene scrivendo il percorso in un campo, con l'elenco dei
-file adatti della cartella sotto (la finestra di sistema non è disponibile con
-la versione di Rust usata). La cartella proposta è *Documenti*. Dopo
+Importazione ed esportazione aprono la **finestra di sistema** per aprire o
+salvare (con i tipi di file in italiano, per esempio *Sessione OBDio
+(\*.obdio.jsonl)*, *CSV*, *JSON*, *Tutti i file*): la finestra si apre in un
+thread a parte, quindi i dati in diretta e la registrazione continuano mentre è
+aperta, e finché è aperta i pulsanti che ne aprirebbero un'altra sono
+disabilitati. Ogni scopo (importare, esportare, riprodurre) riparte dall'ultima
+cartella usata; la prima volta è *Documenti* (le sessioni, per «Riproduci»).
+Salvando senza estensione, questa viene aggiunta. Su Android la finestra di
+sistema non esiste (`rfd` non lo supporta): resta la finestra interna, con il
+percorso scritto in un campo e l'elenco dei file adatti della cartella. Dopo
 l'esportazione l'app dice dove ha scritto il file, con **Apri la cartella**.
+Le finestre di sistema non sono state ancora provate a mano.
 
 Regole che valgono sempre: un dato assente non diventa mai zero (in un CSV di
 Torque `-` è importato come «risposta mancante» senza valore), nulla viene

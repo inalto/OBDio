@@ -59,8 +59,10 @@ winit sono quelle verificate in quella sezione.
 - Accesso ai file con lo *scoped storage*: oggi i dati stanno nella cartella
   privata dell'app; importazione ed esportazione verso cartelle condivise
   richiedono il selettore di sistema (Storage Access Framework). `rfd` non
-  supporta Android. La finestra di scelta file interna (`scelta_file`) parte
-  dalla cartella corrente, non da Documenti.
+  supporta Android: sul desktop si usano le finestre di sistema, su Android
+  resta la finestra di scelta file interna (`scelta_file`, selezionata alla
+  compilazione da `piattaforma::DIALOGO_DI_SISTEMA`), che parte dalla
+  cartella corrente, non da Documenti.
 - Inserti di sicurezza dello schermo (notch, barre di sistema): winit non li
   riporta ancora; l'interfaccia potrebbe finire sotto di essi.
 - Tastiera a schermo: il comportamento dei campi di testo egui con
