@@ -19,6 +19,7 @@ pub mod elm;
 pub mod model;
 pub mod mqtt;
 pub mod obd;
+pub mod piattaforma;
 pub mod recording;
 pub mod riproduzione;
 pub mod scambio;
@@ -26,3 +27,24 @@ pub mod summary;
 pub mod transport;
 pub mod ui;
 pub mod worker;
+
+/// Punto d'ingresso su Android (GameActivity). Condivide con la versione per
+/// desktop la costruzione dell'app, [`ui::crea_app`].
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+fn android_main(app: android_activity::AndroidApp) {
+    android_logger::init_once(
+        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+    );
+    // Dati privati dell'app: unica cartella scrivibile senza permessi.
+    if let Some(percorso) = app.internal_data_path() {
+        config::imposta_cartella_base(percorso);
+    }
+    let opzioni = eframe::NativeOptions {
+        android_app: Some(app),
+        ..Default::default()
+    };
+    if let Err(e) = eframe::run_native("OBDio", opzioni, Box::new(|cc| Ok(ui::crea_app(cc)))) {
+        log::error!("OBDio terminata con errore: {e}");
+    }
+}

@@ -128,25 +128,10 @@ enum Record {
     Diagnosi(Box<DiagnosisReport>),
 }
 
-/// Cartella delle sessioni: accanto all'eseguibile, oppure in Documenti se
-/// la cartella dell'eseguibile non è scrivibile.
+/// Cartella delle sessioni: nella cartella base se fissata (Android), altrimenti
+/// accanto all'eseguibile oppure in Documenti se questa non è scrivibile.
 pub fn cartella_sessioni() -> PathBuf {
-    let accanto = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("sessioni")));
-    if let Some(dir) = accanto
-        && fs::create_dir_all(&dir).is_ok()
-        && File::create(dir.join(".prova_scrittura")).is_ok()
-    {
-        let _ = fs::remove_file(dir.join(".prova_scrittura"));
-        return dir;
-    }
-    let base = std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    let dir = base.join("Documents").join("OBDio").join("sessioni");
-    let _ = fs::create_dir_all(&dir);
-    dir
+    crate::config::cartella_dati("sessioni")
 }
 
 /// Scrive una sessione mentre i campioni arrivano.

@@ -539,53 +539,58 @@ impl App {
             self.invia(Comando::Collega(Sorgente::Ble(indirizzo)));
         }
 
-        sezione(ui, "2. Porta seriale (Bluetooth Classic/SPP o USB)");
-        ui.label(
-            "Per gli adattatori associati in Windows come dispositivo Bluetooth classico: \
-             scegli la porta COM «in uscita» creata dall'associazione.",
-        );
-        ui.horizontal(|ui| {
-            egui::ComboBox::from_id_salt("porta")
-                .width(260.0)
-                .selected_text(if self.porta_scelta.is_empty() {
-                    "Nessuna porta COM".to_string()
-                } else {
-                    self.porta_scelta.clone()
-                })
-                .show_ui(ui, |ui| {
-                    for p in self.porte.clone() {
-                        ui.selectable_value(
-                            &mut self.porta_scelta,
-                            p.nome.clone(),
-                            format!("{} — {}", p.nome, p.tipo),
-                        );
-                    }
-                });
-            egui::ComboBox::from_id_salt("baud")
-                .width(110.0)
-                .selected_text(format!("{} baud", self.baud))
-                .show_ui(ui, |ui| {
-                    for b in [38400u32, 9600, 115200] {
-                        ui.selectable_value(&mut self.baud, b, format!("{b} baud"));
-                    }
-                });
-            if ui.button("Aggiorna elenco").clicked() {
-                self.invia(Comando::ElencaSeriali);
-            }
-            if ui
-                .add_enabled(
-                    libero && !self.porta_scelta.is_empty(),
-                    egui::Button::new("Collega via seriale"),
-                )
-                .clicked()
-            {
-                self.errore = None;
-                self.invia(Comando::Collega(Sorgente::Seriale {
-                    porta: self.porta_scelta.clone(),
-                    baud: self.baud,
-                }));
-            }
-        });
+        if crate::piattaforma::SERIALE_DISPONIBILE {
+            sezione(ui, "2. Porta seriale (Bluetooth Classic/SPP o USB)");
+            ui.label(
+                "Per gli adattatori associati in Windows come dispositivo Bluetooth classico: \
+                 scegli la porta COM «in uscita» creata dall'associazione.",
+            );
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("porta")
+                    .width(260.0)
+                    .selected_text(if self.porta_scelta.is_empty() {
+                        "Nessuna porta COM".to_string()
+                    } else {
+                        self.porta_scelta.clone()
+                    })
+                    .show_ui(ui, |ui| {
+                        for p in self.porte.clone() {
+                            ui.selectable_value(
+                                &mut self.porta_scelta,
+                                p.nome.clone(),
+                                format!("{} — {}", p.nome, p.tipo),
+                            );
+                        }
+                    });
+                egui::ComboBox::from_id_salt("baud")
+                    .width(110.0)
+                    .selected_text(format!("{} baud", self.baud))
+                    .show_ui(ui, |ui| {
+                        for b in [38400u32, 9600, 115200] {
+                            ui.selectable_value(&mut self.baud, b, format!("{b} baud"));
+                        }
+                    });
+                if ui.button("Aggiorna elenco").clicked() {
+                    self.invia(Comando::ElencaSeriali);
+                }
+                if ui
+                    .add_enabled(
+                        libero && !self.porta_scelta.is_empty(),
+                        egui::Button::new("Collega via seriale"),
+                    )
+                    .clicked()
+                {
+                    self.errore = None;
+                    self.invia(Comando::Collega(Sorgente::Seriale {
+                        porta: self.porta_scelta.clone(),
+                        baud: self.baud,
+                    }));
+                }
+            });
+        } else {
+            sezione(ui, "2. Porta seriale");
+            ui.label(crate::piattaforma::NOTA_SERIALE_ASSENTE);
+        }
 
         sezione(ui, "3. Modalità demo");
         ui.label(

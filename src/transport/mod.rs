@@ -6,6 +6,11 @@ pub mod ble;
 pub mod copione;
 pub mod demo;
 pub mod profili;
+#[cfg(not(target_os = "android"))]
+pub mod serial;
+// Su Android `serialport` non elenca le porte: modulo con la stessa interfaccia.
+#[cfg(target_os = "android")]
+#[path = "serial_android.rs"]
 pub mod serial;
 
 /// Il collegamento fisico con l'adattatore è caduto.

@@ -575,6 +575,7 @@ impl Worker {
                     self.stato(StatoConn::Scollegato);
                 }
             }
+            Comando::ElencaSeriali if !crate::piattaforma::SERIALE_DISPONIBILE => {}
             Comando::ElencaSeriali => match serial::elenca_porte() {
                 Ok(p) => self.invia(Evento::PorteSeriali(p)),
                 Err(e) => self.invia(Evento::Errore(ErroreUtente::Altro(format!(

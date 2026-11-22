@@ -6,11 +6,13 @@ rust-version = "1.93"
 description = "Lettore diagnostico OBD-II/EOBD per adattatori ELM327 (Carista) su Windows; in lettura, salvo la cancellazione confermata dei codici guasto"
 publish = false
 
+[lib]
+crate-type = ["cdylib", "lib"]
+
 [dependencies]
 eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts"] }
 egui_plot = "0.36"
 btleplug = "0.13.5"
-serialport = { version = "4.10", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
 futures = "0.3"
 serde = { version = "1", features = ["derive"] }
@@ -19,6 +21,18 @@ chrono = "0.4"
 uuid = "1"
 rumqttc = { version = "0.25", default-features = false }
 png = { version = "0.18", optional = true }
+
+# Porte seriali: su Android non si possono elencare (vedi docs/ANDROID.md).
+[target.'cfg(not(target_os = "android"))'.dependencies]
+serialport = { version = "4.10", default-features = false }
+
+# Solo Android: punto d'ingresso `android_main` (GameActivity, necessaria per
+# l'immissione di testo). Non influisce sulla build per Windows.
+[target.'cfg(target_os = "android")'.dependencies]
+eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts", "android-game-activity"] }
+android-activity = { version = "0.6", features = ["game-activity"] }
+android_logger = "0.15"
+log = "0.4"
 
 [features]
 # Solo per lo sviluppo: collaudo automatico della GUI in demo con schermate
