@@ -487,7 +487,12 @@ impl eframe::App for App {
         self.ricevi();
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        // Le finestre di sistema per i file si legano a questa finestra.
+        #[cfg(not(target_os = "android"))]
+        scelta_file::registra_finestra(frame);
+        #[cfg(target_os = "android")]
+        let _ = frame;
         #[cfg(feature = "collaudo")]
         collaudo::passo(self, ui.ctx());
         let ctx = ui.ctx().clone();

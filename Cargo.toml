@@ -32,6 +32,7 @@ png = { version = "0.18", optional = true }
 
 # Porte seriali: su Android non si possono elencare (vedi docs/ANDROID.md).
 [target.'cfg(not(target_os = "android"))'.dependencies]
+rfd = { version = "0.18", default-features = false }
 serialport = { version = "4.10", default-features = false }
 
 # Solo Android: punto d'ingresso `android_main` (GameActivity, necessaria per
@@ -41,6 +42,11 @@ eframe = { version = "0.35", default-features = false, features = ["glow", "defa
 android-activity = { version = "0.6", features = ["game-activity"] }
 android_logger = "0.15"
 log = "0.4"
+
+# Su Linux e BSD `rfd` ha bisogno di un'implementazione: il portale XDG
+# (libdbus oppure zenity a tempo di esecuzione), senza compilare codice C.
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }
 
 [features]
 # Solo per lo sviluppo: collaudo automatico della GUI in demo con schermate

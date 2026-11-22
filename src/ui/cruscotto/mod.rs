@@ -402,8 +402,6 @@ impl App {
             self.barra_modifica(ui, stretto);
         }
         self.riga_messaggi(ui);
-        let ctx = ui.ctx().clone();
-        self.dialogo_file(&ctx);
 
         if self.cruscotto.modifica && self.cruscotto.selezionato.is_some() {
             if stretto {

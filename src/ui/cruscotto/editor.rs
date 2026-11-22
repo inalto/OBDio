@@ -12,7 +12,9 @@ use super::modello::{
 };
 use super::sorgenti;
 use crate::obd::pids;
-use crate::ui::scelta_file::{EsitoScelta, SceltaFile, cartella_documenti};
+use crate::ui::scelta_file::{
+    EsitoScelta, FILTRO_JSON, SceltaFile, Scopo, cartella_documenti, occupato,
+};
 use crate::ui::{App, tema};
 
 /// Cosa fare con il file scelto nella finestra.
@@ -244,16 +246,26 @@ impl App {
 
     fn menu_file(&mut self, ui: &mut egui::Ui) {
         ui.menu_button("Importa / esporta", |ui| {
-            if ui.button("Esporta questa pagina…").clicked() {
+            let libero = !occupato() && self.cruscotto.dialogo.is_none();
+            if ui
+                .add_enabled(libero, egui::Button::new("Esporta questa pagina…"))
+                .clicked()
+            {
                 let i = self.cruscotto.pagina;
                 self.apri_dialogo(AzioneFile::EsportaPagina(i));
                 ui.close();
             }
-            if ui.button("Esporta tutti i cruscotti…").clicked() {
+            if ui
+                .add_enabled(libero, egui::Button::new("Esporta tutti i cruscotti…"))
+                .clicked()
+            {
                 self.apri_dialogo(AzioneFile::EsportaTutto);
                 ui.close();
             }
-            if ui.button("Importa da file…").clicked() {
+            if ui
+                .add_enabled(libero, egui::Button::new("Importa da file…"))
+                .clicked()
+            {
                 self.apri_dialogo(AzioneFile::Importa);
                 ui.close();
             }
@@ -798,6 +810,10 @@ impl App {
     // ------------------------------------------------------------------
 
     fn apri_dialogo(&mut self, azione: AzioneFile) {
+        // Una sola finestra alla volta (quella di sistema non è modale per l'app).
+        if self.cruscotto.dialogo.is_some() || occupato() {
+            return;
+        }
         let nome = match azione {
             AzioneFile::EsportaPagina(i) => self
                 .cruscotto
@@ -827,9 +843,17 @@ impl App {
                 "Scrivi dove salvare il file JSON. Se esiste già, viene sostituito.",
             ),
         };
-        let scelta = SceltaFile::new(titolo, pulsante, &cartella_documenti(), &nome)
+        let (salva, scopo) = match azione {
+            AzioneFile::Importa => (false, Scopo::ImportaCruscotto),
+            _ => (true, Scopo::EsportaCruscotto),
+        };
+        let mut scelta = SceltaFile::new(titolo, pulsante, &cartella_documenti(), &nome)
             .spiegazione(spiegazione)
-            .finali(&[".json"]);
+            .filtri(&[FILTRO_JSON])
+            .scopo(scopo);
+        if salva {
+            scelta = scelta.salva();
+        }
         self.cruscotto.dialogo = Some(DialogoFile { azione, scelta });
     }
 

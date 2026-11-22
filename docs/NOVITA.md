@@ -81,3 +81,17 @@ nel README, in [Stato delle verifiche](../README.md#stato-delle-verifiche).
 - Ogni risposta dichiara l'origine dei dati (veicolo, demo, riproduzione); il
   VIN non esce mai e i codici guasto non si possono cancellare da qui.
 - Non è stato provato con un assistente AI reale: vedi [MCP.md](MCP.md).
+
+## Finestre di sistema per i file
+
+- Importa ed esporta (sessioni e cruscotti) aprono la finestra di sistema per
+  aprire e salvare, con filtri in italiano e l'ultima cartella ricordata per
+  ogni scopo; la finestra gira in un thread a parte e l'app non si ferma. Su
+  Android resta la finestra interna. Non ancora provata a mano.
+
+## Descrizioni italiane dei codici guasto
+
+- Tutti i 9.533 codici generici hanno ora una descrizione italiana.
+- Le circa 55 descrizioni curate a mano restano prioritarie; le altre sono una traduzione automatica fatta con un glossario di officina.
+- La traduzione non è stata rivista da un tecnico: la pagina Diagnosi mostra accanto il titolo inglese originale, che vale in caso di dubbio.
+- Dettagli in [FONTI_DATI.md](FONTI_DATI.md).

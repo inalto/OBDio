@@ -12,7 +12,10 @@ use super::grafici::{self, Opzioni};
 use super::icone::{self, Icona};
 use super::navigazione::{altezza_modale, larghezza_finestra};
 use super::pagine::{disegna_diagnosi, nome_file, selettore_extra};
-use super::scelta_file::{EsitoScelta, SceltaFile, cartella_documenti};
+use super::scelta_file::{
+    EsitoScelta, FILTRO_CSV, FILTRO_IMPORTABILI, FILTRO_JSON, FILTRO_SESSIONE, Filtro, SceltaFile,
+    Scopo, cartella_documenti, occupato,
+};
 use super::{App, SessioneAperta, apri_cartella, tema};
 use crate::model::num_it;
 use crate::obd::pids;
@@ -54,11 +57,11 @@ pub(crate) struct StatoSessioni {
     pub dettaglio: bool,
 }
 
-fn finali(f: FormatoEsportazione) -> &'static [&'static str] {
+fn filtri(f: FormatoEsportazione) -> [Filtro; 1] {
     match f {
-        FormatoEsportazione::Sessione => &[".obdio.jsonl"],
-        FormatoEsportazione::CsvObdio | FormatoEsportazione::CsvTorque => &[".csv"],
-        FormatoEsportazione::DiagnosiJson => &[".json"],
+        FormatoEsportazione::Sessione => [FILTRO_SESSIONE],
+        FormatoEsportazione::CsvObdio | FormatoEsportazione::CsvTorque => [FILTRO_CSV],
+        FormatoEsportazione::DiagnosiJson => [FILTRO_JSON],
     }
 }
 
@@ -183,6 +186,10 @@ impl App {
 
     /// Apre la finestra di scelta del file per l'azione.
     pub(crate) fn apri_scelta_sessioni(&mut self, azione: AzioneSessioni) {
+        // Una sola finestra alla volta (quella di sistema non è modale per l'app).
+        if self.sessioni.dialogo.is_some() || occupato() {
+            return;
+        }
         let scelta = match azione {
             AzioneSessioni::Importa => SceltaFile::new(
                 "Importa una sessione",
@@ -195,7 +202,8 @@ impl App {
                  (trackLog.csv). Il formato si riconosce dal contenuto; prima di salvare vedi \
                  che cosa è stato letto.",
             )
-            .finali(&[".obdio.jsonl", ".csv", ".txt"]),
+            .filtri(&[FILTRO_IMPORTABILI, FILTRO_SESSIONE, FILTRO_CSV])
+            .scopo(Scopo::ImportaSessione),
             AzioneSessioni::Esporta(f) => {
                 let Some(s) = &self.aperta else {
                     return;
@@ -207,7 +215,9 @@ impl App {
                     &scambio::nome_proposto(&s.dati, f),
                 )
                 .spiegazione("Scrivi dove salvare il file. Se esiste già, viene sostituito.")
-                .finali(finali(f))
+                .salva()
+                .filtri(&filtri(f))
+                .scopo(Scopo::EsportaSessione)
             }
             AzioneSessioni::Riproduci => SceltaFile::new(
                 "Riproduci una sessione",
@@ -219,7 +229,8 @@ impl App {
                 "Scegli una sessione salvata (anche importata): i suoi dati scorrono nel tempo \
                  su cruscotto, sensori, grafici e MQTT come se arrivassero dall'auto.",
             )
-            .finali(&[recording::ESTENSIONE]),
+            .filtri(&[FILTRO_SESSIONE])
+            .scopo(Scopo::RiproduciSessione),
         };
         self.sessioni.dialogo = Some((azione, scelta));
     }
@@ -303,6 +314,9 @@ impl App {
     /// Finestre della scheda (scelta del file, anteprima dell'importazione),
     /// mostrate sopra a qualunque scheda.
     pub(crate) fn finestre_sessioni(&mut self, ctx: &egui::Context) {
+        // Anche la scelta del file del cruscotto: così, con la finestra di
+        // sistema aperta, la risposta arriva qualunque scheda sia visibile.
+        self.dialogo_file(ctx);
         if let Some((azione, scelta)) = &mut self.sessioni.dialogo {
             let azione = *azione;
             match scelta.mostra(ctx, "sessioni") {
@@ -433,7 +447,7 @@ impl App {
     fn elenco_sessioni(&mut self, ui: &mut egui::Ui, stretto: bool) {
         ui.horizontal_wrapped(|ui| {
             if ui
-                .add(componenti::primario("Importa…"))
+                .add_enabled(!occupato(), componenti::primario("Importa…"))
                 .on_hover_text("Sessione OBDio, CSV OBDio o CSV in stile Torque")
                 .clicked()
             {
@@ -568,7 +582,7 @@ impl App {
             .is_some_and(|s| s.dati.diagnosi.is_some());
         ui.menu_button("Esporta…", |ui| {
             for f in FormatoEsportazione::TUTTI {
-                let ok = f != FormatoEsportazione::DiagnosiJson || ha_diagnosi;
+                let ok = (f != FormatoEsportazione::DiagnosiJson || ha_diagnosi) && !occupato();
                 if ui
                     .add_enabled(ok, egui::Button::new(format!("{}…", f.nome())))
                     .on_disabled_hover_text("La sessione non contiene una diagnosi")

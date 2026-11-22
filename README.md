@@ -287,7 +287,9 @@ Dal menu **Importa / esporta** si salva in JSON la pagina visibile o l'intero
 insieme, e si importa un file esportato (una pagina o tutto): le pagine
 importate si aggiungono alle esistenti e restano da salvare. Un file non
 valido viene rifiutato con il motivo, senza cambiare nulla. La finestra
-chiede il percorso del file e propone l'elenco dei JSON della cartella.
+apre la finestra di sistema per scegliere il file da importare o dove
+salvare quello esportato (su Android, dove non esiste, la finestra interna con
+il percorso e l'elenco dei JSON della cartella).
 
 I cruscotti stanno in `configurazione\cruscotti.json` accanto
 all'eseguibile (oppure in `Documenti\OBDio\configurazione` se quella cartella
@@ -377,10 +379,18 @@ Nella scheda **Sessioni**:
   delle sessioni un file `…_IMPORTATA_<nome del file>.obdio.jsonl`; il file
   d'origine non viene toccato.
 
-La scelta del file avviene scrivendo il percorso in un campo, con l'elenco dei
-file adatti della cartella sotto (la finestra di sistema non è disponibile con
-la versione di Rust usata). La cartella proposta è *Documenti*. Dopo
+Importazione ed esportazione aprono la **finestra di sistema** per aprire o
+salvare (con i tipi di file in italiano, per esempio *Sessione OBDio
+(\*.obdio.jsonl)*, *CSV*, *JSON*, *Tutti i file*): la finestra si apre in un
+thread a parte, quindi i dati in diretta e la registrazione continuano mentre è
+aperta, e finché è aperta i pulsanti che ne aprirebbero un'altra sono
+disabilitati. Ogni scopo (importare, esportare, riprodurre) riparte dall'ultima
+cartella usata; la prima volta è *Documenti* (le sessioni, per «Riproduci»).
+Salvando senza estensione, questa viene aggiunta. Su Android la finestra di
+sistema non esiste (`rfd` non lo supporta): resta la finestra interna, con il
+percorso scritto in un campo e l'elenco dei file adatti della cartella. Dopo
 l'esportazione l'app dice dove ha scritto il file, con **Apri la cartella**.
+Le finestre di sistema non sono state ancora provate a mano.
 
 Regole che valgono sempre: un dato assente non diventa mai zero (in un CSV di
 Torque `-` è importato come «risposta mancante» senza valore), nulla viene
@@ -584,7 +594,7 @@ non è verificabile: è un'ipotesi, non un dato.
 
 | Verifica | Esito |
 |---|---|
-| Test automatici (233: 206 unitari e 27 di integrazione in `tests/`): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
+| Test automatici (240: 213 unitari e 27 di integrazione in `tests/`): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
 | Flusso demo attraverso il thread di lavoro reale: collegamento, P0420, fermo immagine, polling con priorità alle sonde, registrazione, CSV, riapertura | Superato |
 | Distanza parziale attraverso il thread di lavoro reale: campioni monotoni in km, registrati nella sessione e nel CSV | Superato |
 | Cancellazione dei codici in demo attraverso il thread di lavoro reale: copia della diagnosi, servizio 04, rilettura con P0420 solo permanente, MIL spenta, prontezza azzerata | Superato |
@@ -645,7 +655,9 @@ non è verificabile: è un'ipotesi, non un dato.
   prontezza, fermo immagine e dati dal vivo; Mode 06 e VIN no. Questi
   protocolli sono coperti solo da test sul formato delle trame.
 - Le descrizioni dei DTC coprono i 9.533 codici generici (P0, P2, P3, B0, C0,
-  U0, U3), in inglese, con circa 55 descrizioni in italiano curate a mano. I
+  U0, U3) in italiano: circa 55 curate a mano, le altre tradotte
+  automaticamente e non riviste da un tecnico (accanto resta il titolo inglese
+  originale; vedi [docs/FONTI_DATI.md](docs/FONTI_DATI.md)). I
   codici del costruttore (per esempio P1xxx) mostrano solo il codice.
 - Il PID 4F (fondi scala dichiarati dalla centralina) viene segnalato ma non
   applicato alle formule.

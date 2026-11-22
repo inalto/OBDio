@@ -157,4 +157,4 @@ Tutte le fasi del piano sono fatte nel codice. Restano non verificati:
 - Android: codice non compilato, nessun NDK, nessun APK (vedi
   [ANDROID.md](ANDROID.md)).
 
-Test automatici: 188 (168 unitari e 20 di integrazione).
+Test automatici: 240 (213 unitari e 27 di integrazione).
