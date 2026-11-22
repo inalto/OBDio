@@ -12,7 +12,7 @@
 //!
 //! | Argomento | Contenuto |
 //! |---|---|
-//! | `obdio/auto/stato` | Trattenuto. `{"stato":"online","origine":"veicolo"\|"demo_sintetico","app":"OBDio","versione":"…"}` con un collegamento attivo, altrimenti `{"stato":"offline"}`. L'ultima volontà del client è `{"stato":"offline"}`; alla chiusura pulita lo stesso messaggio è pubblicato esplicitamente. |
+//! | `obdio/auto/stato` | Trattenuto. `{"stato":"online","origine":"veicolo"\|"demo_sintetico"\|"riproduzione","app":"OBDio","versione":"…"}` con un collegamento attivo, altrimenti `{"stato":"offline"}`. L'ultima volontà del client è `{"stato":"offline"}`; alla chiusura pulita lo stesso messaggio è pubblicato esplicitamente. |
 //! | `obdio/auto/sensori/<chiave>` | Il solo numero, in testo con il punto decimale. Non trattenuto. Solo letture valide, al massimo una ogni `intervallo_sensore_ms` per chiave. |
 //! | `obdio/auto/istantanea` | JSON con l'ultimo stato di ogni parametro, al massimo ogni `intervallo_istantanea_ms`: `{"ts":…,"origine":…,"valori":{chiave:{"valore":numero\|null,"unita":…,"stato":…,"ecu":…}}}`. Un valore assente è `null`, mai zero. |
 //! | `obdio/auto/diagnosi` | Trattenuto. La diagnosi letta (senza VIN) a ogni lettura. |
@@ -410,21 +410,10 @@ impl Argomenti {
 // Pezzi puri
 // ---------------------------------------------------------------------------
 
-/// Da dove arrivano i dati pubblicati.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Origine {
-    Veicolo,
-    DemoSintetico,
-}
-
-impl Origine {
-    pub fn codice(self) -> &'static str {
-        match self {
-            Origine::Veicolo => "veicolo",
-            Origine::DemoSintetico => "demo_sintetico",
-        }
-    }
-}
+/// Da dove arrivano i dati pubblicati: `veicolo`, `demo_sintetico` o
+/// `riproduzione` (una sessione registrata rivissuta, mai spacciata per dati
+/// attuali del veicolo).
+pub use crate::model::Origine;
 
 /// Limita la frequenza per chiave: ammette al massimo un messaggio ogni
 /// `intervallo`.
@@ -890,14 +879,18 @@ impl MqttPublisher {
 
     /// Un collegamento con il veicolo (o con il simulatore) è attivo.
     pub fn collegato(&self, demo: bool) {
+        self.collegato_origine(if demo {
+            Origine::Demo
+        } else {
+            Origine::Veicolo
+        });
+    }
+
+    /// Una sorgente di dati è attiva: veicolo, simulatore o riproduzione.
+    pub fn collegato_origine(&self, origine: Origine) {
         if self.nucleo.fermato() {
             return;
         }
-        let origine = if demo {
-            Origine::DemoSintetico
-        } else {
-            Origine::Veicolo
-        };
         {
             let mut l = blocca(&self.logica);
             l.origine = Some(origine);
@@ -1251,11 +1244,7 @@ mod tests {
             "o2s2_tensione".into(),
             campione("o2s2_tensione", None, Stato::RispostaMancante),
         );
-        let j = istantanea_json(
-            "2026-01-01T10:00:00+01:00",
-            Some(Origine::DemoSintetico),
-            &ultimi,
-        );
+        let j = istantanea_json("2026-01-01T10:00:00+01:00", Some(Origine::Demo), &ultimi);
         assert_eq!(j["origine"], "demo_sintetico");
         assert_eq!(j["valori"]["giri"]["valore"], 2128.0);
         assert_eq!(j["valori"]["giri"]["stato"], "ok");
@@ -1481,6 +1470,28 @@ mod tests {
         p.campioni(&[campione("giri", Some(1.0), Stato::Ok)]);
         p.collegato(true);
         assert_eq!(f.tutti().len(), n);
+    }
+
+    #[test]
+    fn riproduzione_mai_spacciata_per_veicolo() {
+        let f = Finta::default();
+        let p = MqttPublisher::con_coda(&config(), Box::new(f.clone()));
+        let a = p.argomenti().clone();
+        p.collegato_origine(Origine::Riproduzione);
+        p.campioni(&[campione("giri", Some(900.0), Stato::Ok)]);
+        p.marcatore(&Marker {
+            t: 1.0,
+            ts: "2026-01-01T10:00:00+01:00".into(),
+            etichetta: "Minimo".into(),
+        });
+        let stato: Value = serde_json::from_str(&f.su(&a.stato()).last().unwrap().1).unwrap();
+        assert_eq!(stato["origine"], "riproduzione");
+        let ist: Value = serde_json::from_str(&f.su(&a.istantanea()).last().unwrap().1).unwrap();
+        assert_eq!(ist["origine"], "riproduzione");
+        let ev: Value = serde_json::from_str(&f.su(&a.evento()).last().unwrap().1).unwrap();
+        assert_eq!(ev["origine"], "riproduzione");
+        assert!(f.tutti().iter().all(|m| !m.1.contains("\"veicolo\"")));
+        p.ferma();
     }
 
     #[test]

@@ -8,7 +8,9 @@ use eframe::egui::{self, RichText, ScrollArea};
 
 use super::grafici::{self, Opzioni};
 use super::pagine::{nome_file, selettore_extra};
-use super::{App, GIALLO, GRIGIO, ROSSO, apri_cartella, colore_stato, etichetta_stato};
+use super::{
+    ARANCIO_DEMO, App, GIALLO, GRIGIO, ROSSO, apri_cartella, colore_stato, etichetta_stato,
+};
 use crate::model::num_it;
 use crate::obd::pids::{self, Gruppo, Param, PresetP0420};
 use crate::summary::{numero_param, valore_con_unita};
@@ -77,17 +79,23 @@ pub(crate) fn chiavi_da_selezione(
 impl App {
     /// Parametri da mostrare nell'elenco, per gruppo e poi per PID. Collegati:
     /// quelli che la centralina dichiara (i calcolati se è disponibile la
-    /// sorgente). Scollegati: quelli presenti nei dati già letti.
-    fn parametri_disponibili(&self) -> Vec<&'static Param> {
+    /// sorgente; in riproduzione, quelli presenti nella sessione, liberi
+    /// compresi). Scollegati: quelli presenti nei dati già letti.
+    pub(crate) fn parametri_disponibili(&self) -> Vec<&'static Param> {
         let disponibile = |p: &Param| match &self.info {
+            Some(info) if p.libero => info.liberi.contains(&p.key),
             Some(info) if p.derivato => pids::sorgente_derivato(&p.key)
                 .and_then(pids::per_key)
                 .is_some_and(|s| info.unione.contains(&s.pid)),
             Some(info) => info.unione.contains(&p.pid),
             None => self.live.serie.contains_key(&p.key),
         };
-        let mut v: Vec<&Param> = pids::catalogo().iter().filter(|p| disponibile(p)).collect();
-        v.sort_by_key(|p| (p.gruppo, p.derivato, p.pid));
+        let mut v: Vec<&Param> = pids::catalogo()
+            .iter()
+            .chain(pids::liberi())
+            .filter(|p| disponibile(p))
+            .collect();
+        v.sort_by_key(|p| (p.gruppo, p.derivato, p.libero, p.pid));
         v
     }
 
@@ -292,6 +300,32 @@ impl App {
     }
 
     fn sensori_lettura_e_registrazione(&mut self, ui: &mut egui::Ui) {
+        if self.in_riproduzione() {
+            ui.add_space(6.0);
+            ui.label(
+                RichText::new(
+                    "Riproduzione: scorrono tutti i dati della sessione, la lettura non si avvia \
+                     né si ferma. Le spunte scelgono che cosa mostrare.",
+                )
+                .color(ARANCIO_DEMO),
+            );
+            ui.add_space(8.0);
+            ui.label(RichText::new("Registrazione").heading());
+            ui.add_enabled(false, egui::Button::new("Avvia registrazione"))
+                .on_disabled_hover_text(
+                    "Durante la riproduzione non si registra: la sessione è già registrata.",
+                );
+            ui.label(RichText::new("Marcatori").strong());
+            ui.label(
+                RichText::new(
+                    "Durante la riproduzione non si aggiungono marcatori: quelli registrati \
+                     compaiono sulla barra di trasporto e nei grafici.",
+                )
+                .small()
+                .color(GRIGIO),
+            );
+            return;
+        }
         let ha_chiavi = !self.chiavi_polling().0.is_empty();
         ui.add_space(6.0);
         ui.horizontal(|ui| {

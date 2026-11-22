@@ -2,7 +2,7 @@
 
 use eframe::egui::{self, Color32, RichText, ScrollArea, Stroke};
 
-use super::grafici::{self, Opzioni};
+use super::sessioni::AzioneSessioni;
 use super::{
     ARANCIO_DEMO, App, GIALLO, GRIGIO, ROSSO, Scheda, VERDE, apri_cartella, etichetta_stato,
 };
@@ -10,7 +10,7 @@ use crate::diagnosis::{DiagnosisReport, Lettura};
 use crate::elm::{ConfermaCancellazione, EsitoCancellazione, RispostaCancellazione};
 use crate::model::{Stato, num_it};
 use crate::obd::pids;
-use crate::recording;
+use crate::riproduzione::data_leggibile;
 use crate::summary::{self, valore_con_unita};
 use crate::worker::{Comando, Sorgente, StatoConn};
 
@@ -51,7 +51,7 @@ fn sezione(ui: &mut egui::Ui, titolo: &str) {
 }
 
 /// Mostra un referto di diagnosi (dal vivo o da una sessione salvata).
-fn disegna_diagnosi(ui: &mut egui::Ui, d: &DiagnosisReport) {
+pub(super) fn disegna_diagnosi(ui: &mut egui::Ui, d: &DiagnosisReport) {
     egui::Grid::new("diag_info")
         .num_columns(2)
         .spacing([16.0, 4.0])
@@ -356,7 +356,15 @@ impl App {
         let Some(info) = self.info.clone() else {
             return;
         };
-        sezione(ui, "Collegamento attivo");
+        let riproduzione = info.riproduzione.clone();
+        sezione(
+            ui,
+            if riproduzione.is_some() {
+                "Riproduzione in corso"
+            } else {
+                "Collegamento attivo"
+            },
+        );
         egui::Grid::new("conn_info")
             .num_columns(2)
             .spacing([16.0, 5.0])
@@ -364,6 +372,11 @@ impl App {
                 ui.label("Collegamento");
                 ui.label(&info.collegamento);
                 ui.end_row();
+                if let Some(r) = &riproduzione {
+                    ui.label("Dati registrati il");
+                    ui.label(data_leggibile(&r.registrata_il));
+                    ui.end_row();
+                }
                 ui.label("Adattatore");
                 ui.label(&info.adattatore);
                 ui.end_row();
@@ -373,8 +386,21 @@ impl App {
                 ui.label("Centraline che rispondono");
                 ui.label(info.ecu.join(", "));
                 ui.end_row();
-                ui.label("Parametri dichiarati");
-                ui.label(format!("{} PID del servizio 01", info.unione.len()));
+                if riproduzione.is_some() {
+                    ui.label("Parametri nella sessione");
+                    ui.label(format!(
+                        "{} PID del servizio 01{}",
+                        info.unione.len(),
+                        if info.liberi.is_empty() {
+                            String::new()
+                        } else {
+                            format!(", {} parametri liberi", info.liberi.len())
+                        }
+                    ));
+                } else {
+                    ui.label("Parametri dichiarati");
+                    ui.label(format!("{} PID del servizio 01", info.unione.len()));
+                }
                 ui.end_row();
                 if let Some(g) = &info.gatt {
                     ui.label("Profilo BLE");
@@ -391,8 +417,16 @@ impl App {
         }
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Scollega").clicked() {
+            let scollega = if riproduzione.is_some() {
+                "Chiudi riproduzione"
+            } else {
+                "Scollega"
+            };
+            if ui.button(scollega).clicked() {
                 self.invia(Comando::Scollega);
+            }
+            if riproduzione.is_some() && ui.button("Vai al cruscotto").clicked() {
+                self.scheda = Scheda::Cruscotto;
             }
             if ui.button("Vai ai codici guasto").clicked() {
                 self.scheda = Scheda::Diagnosi;
@@ -565,6 +599,24 @@ impl App {
             self.errore = None;
             self.invia(Comando::Collega(Sorgente::Demo));
         }
+
+        sezione(ui, "4. Riproduzione di una sessione");
+        ui.label(
+            "Rivivi una sessione registrata o importata: i dati scorrono nel tempo su \
+             cruscotto, sensori, grafici e MQTT, con pausa, posizione e velocità. Non si \
+             registra e non si cancellano codici.",
+        );
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(libero, egui::Button::new("Riproduci una sessione…"))
+                .clicked()
+            {
+                self.apri_scelta_sessioni(AzioneSessioni::Riproduci);
+            }
+            if ui.button("Vai alle sessioni salvate").clicked() {
+                self.scheda = Scheda::Sessioni;
+            }
+        });
     }
 
     // ------------------------------------------------------------------
@@ -572,9 +624,18 @@ impl App {
     // ------------------------------------------------------------------
 
     pub(crate) fn pagina_diagnosi(&mut self, ui: &mut egui::Ui) {
+        let riproduzione = self.in_riproduzione();
+        let pronto = self.pronto() && !riproduzione;
+        let in_riproduzione = "Durante la riproduzione non c'è una centralina collegata: si vede \
+                               la diagnosi registrata nella sessione.";
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(self.pronto(), egui::Button::new("Leggi diagnosi"))
+                .add_enabled(pronto, egui::Button::new("Leggi diagnosi"))
+                .on_disabled_hover_text(if riproduzione {
+                    in_riproduzione
+                } else {
+                    "Collega l'adattatore o avvia la demo"
+                })
                 .clicked()
             {
                 self.invia(Comando::LeggiDiagnosi);
@@ -603,11 +664,17 @@ impl App {
                 .fill(ROSSO_SCURO)
                 .stroke(Stroke::new(1.0, ROSSO));
                 if ui
-                    .add_enabled(self.pronto(), pulsante)
+                    .add_enabled(pronto, pulsante)
                     .on_hover_text(
                         "Cancella codici memorizzati e in sospeso, fermo immagine e prontezza. \
                          Chiede conferma.",
                     )
+                    .on_disabled_hover_text(if riproduzione {
+                        "Durante la riproduzione i codici non si cancellano: nessuna centralina \
+                         è collegata."
+                    } else {
+                        "Collega l'adattatore o avvia la demo"
+                    })
                     .clicked()
                 {
                     self.conferma_cancellazione = Some(false);
@@ -615,6 +682,9 @@ impl App {
             });
         });
         ui.separator();
+        if riproduzione {
+            ui.label(RichText::new(in_riproduzione).color(ARANCIO_DEMO));
+        }
         self.disegna_esito_cancellazione(ui);
         if !self.collegato() && self.diagnosi.is_some() {
             ui.label(
@@ -880,145 +950,6 @@ impl App {
             self.conferma_cancellazione = Some(spunta);
         }
     }
-
-    // ------------------------------------------------------------------
-    // Sessioni
-    // ------------------------------------------------------------------
-
-    pub(crate) fn pagina_sessioni(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::left("sessioni_sinistra")
-            .resizable(false)
-            .exact_size(340.0)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.button("Aggiorna").clicked() {
-                        self.elenco = recording::elenca(&self.cartella);
-                    }
-                    if ui.button("Apri la cartella").clicked() {
-                        apri_cartella(&self.cartella);
-                    }
-                });
-                ui.label(
-                    RichText::new(self.cartella.display().to_string())
-                        .small()
-                        .color(GRIGIO),
-                );
-                ui.separator();
-                if self.elenco.is_empty() {
-                    ui.label("Nessuna sessione salvata.");
-                }
-                ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        for p in self.elenco.clone() {
-                            let nome = nome_file(&p);
-                            let breve = nome
-                                .strip_suffix(recording::ESTENSIONE)
-                                .unwrap_or(&nome)
-                                .to_string();
-                            let scelta = self.aperta.as_ref().is_some_and(|s| s.dati.percorso == p);
-                            if ui.selectable_label(scelta, breve).clicked() {
-                                self.apri_sessione(p);
-                            }
-                        }
-                    });
-            });
-        egui::CentralPanel::default().show(ui, |ui| {
-            if self.caricamento.is_some() {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Apertura della sessione…");
-                });
-                return;
-            }
-            if let Some(e) = &self.errore_sessione {
-                ui.label(RichText::new(format!("Sessione non apribile: {e}")).color(ROSSO));
-            }
-            let Some(s) = self.aperta.as_mut() else {
-                ui.label(
-                    "Scegli una sessione dall'elenco per rivedere i grafici senza collegare il \
-                     veicolo.",
-                );
-                return;
-            };
-            let i = &s.dati.intestazione;
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(nome_file(&s.dati.percorso)).strong());
-                if i.demo {
-                    ui.label(
-                        RichText::new(" SESSIONE DEMO — dati sintetici ")
-                            .background_color(ARANCIO_DEMO)
-                            .color(Color32::BLACK)
-                            .strong(),
-                    );
-                }
-            });
-            ui.label(format!(
-                "Creata il {} — {} — {} — ECU {}",
-                i.creata,
-                i.adattatore,
-                i.protocollo,
-                i.ecu.join(", ")
-            ));
-            ui.label(format!(
-                "{} campioni, {} marcatori, durata {} s{}",
-                num_it(s.dati.campioni.len() as f64, 0),
-                s.dati.marcatori.len(),
-                num_it(s.archivio.t_max, 0),
-                if s.dati.righe_scartate > 0 {
-                    format!(
-                        " — {} righe illeggibili ignorate (file interrotto)",
-                        s.dati.righe_scartate
-                    )
-                } else {
-                    String::new()
-                }
-            ));
-            ui.horizontal_wrapped(|ui| {
-                if ui.button("Esporta CSV").clicked() {
-                    s.messaggio = Some(match recording::esporta_csv(&s.dati) {
-                        Ok(p) => format!("CSV scritto: {}", p.display()),
-                        Err(e) => e,
-                    });
-                }
-                if let Some(d) = &s.dati.diagnosi
-                    && ui.button("Copia riepilogo diagnosi").clicked()
-                {
-                    ui.ctx().copy_text(summary::riepilogo(d, false));
-                    s.messaggio = Some("Riepilogo copiato negli appunti (senza VIN).".into());
-                }
-                ui.separator();
-                selettore_extra(ui, "sessione_extra", &mut s.extra, &s.archivio);
-            });
-            if let Some(m) = &s.messaggio {
-                ui.label(RichText::new(m).color(VERDE));
-            }
-            if let Some(d) = &s.dati.diagnosi {
-                ui.collapsing("Diagnosi registrata nella sessione", |ui| {
-                    ScrollArea::vertical()
-                        .id_salt("sessione_diagnosi")
-                        .max_height(320.0)
-                        .show(ui, |ui| disegna_diagnosi(ui, d));
-                });
-            }
-            ui.separator();
-            let disegnato = grafici::disegna(
-                ui,
-                &s.archivio,
-                &Opzioni {
-                    id: "sessione",
-                    b1s1: s.preset.b1s1.as_deref(),
-                    b1s2: s.preset.b1s2.as_deref(),
-                    extra: s.extra.as_deref(),
-                    finestra: None,
-                    sintetico: i.demo,
-                },
-            );
-            if !disegnato {
-                ui.label("La sessione non contiene segnali da tracciare.");
-            }
-        });
-    }
 }
 
 /// Scelta del parametro aggiuntivo da tracciare.
@@ -1040,6 +971,12 @@ pub(super) fn selettore_extra(
             for k in EXTRA {
                 if archivio.serie.contains_key(k) {
                     ui.selectable_value(scelta, Some(k.to_string()), nome_parametro(k));
+                }
+            }
+            // Poi tutti gli altri parametri presenti, liberi compresi.
+            for k in archivio.serie.keys() {
+                if !EXTRA.contains(&k.as_str()) {
+                    ui.selectable_value(scelta, Some(k.clone()), nome_parametro(k));
                 }
             }
         });

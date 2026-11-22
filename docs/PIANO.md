@@ -32,7 +32,7 @@ superati, il collaudo automatico dell'interfaccia in demo e un commit.
 | 1 | Database DTC completo; cancellazione codici con conferma e copia di sicurezza; simulatore aggiornato | Opus (cancellazione), Sonnet (database) | |
 | 2 | Catalogo PID esteso (contachilometri, pedale, coppia, consumo…); pagina **Sensori** con tutti i parametri supportati, ricerca, min/medio/max, un grafico per sensore; grandezze calcolate (distanza parziale) | Sonnet | fatto |
 | 3 | **Cruscotto** personalizzabile: tema e token, sette tipi di strumento, griglia, modo modifica, ispettore, pagine, modelli pronti, salvataggio, import/export dei cruscotti | Opus | fatto |
-| 4 | Importazione ed esportazione dei dati (sessione, CSV OBDio, CSV in formato Torque, diagnosi JSON) e **riproduzione** in tempo reale con pausa, posizione e velocità | Opus | |
+| 4 | Importazione ed esportazione dei dati (sessione, CSV OBDio, CSV in formato Torque, diagnosi JSON) e **riproduzione** in tempo reale con pausa, posizione e velocità | Opus | fatto |
 | 5 | Pubblicazione **MQTT** in tempo reale: impostazioni, stato in linea/non in linea, un argomento per sensore più uno JSON cumulativo, discovery per Home Assistant | Sonnet | fatto |
 | 6 | Rifinitura: navigazione a sei destinazioni, layout stretto per telefono, barra di stato, pagina Impostazioni | Opus | |
 | 7 | Base Android (libreria `cdylib`, funzioni desktop dietro `cfg`), guida alla compilazione, README, pacchetto Windows | Haiku (documenti), Sonnet (codice) | |
@@ -84,6 +84,18 @@ coperti dal collaudo automatico.
 - Riproduzione come sorgente di collegamento: barra di trasporto, velocità da
   0,5× a 10×, ripetizione, salto ai marcatori. Fascia arancione sempre
   visibile. Registrazione e cancellazione codici disattivate.
+
+Fatto: `src/riproduzione.rs` (motore puro della riproduzione, verificato con
+passi di lunghezza casuale), `src/scambio.rs` (importazione ed esportazione,
+regole in [FORMATO_CSV.md](FORMATO_CSV.md)), sorgente `Riproduzione` del
+thread di lavoro con `Origine` veicolo/demo/riproduzione fino a MQTT,
+parametri liberi (`pids::registra_libero`), barra di trasporto
+(`src/ui/trasporto.rs`), scheda Sessioni con importazione ed esportazione
+(`src/ui/sessioni.rs`) e finestra di scelta del file condivisa con il
+cruscotto (`src/ui/scelta_file.rs`). Prove d'integrazione in
+`tests/riproduzione.rs`; schermata in `docs/schermate/riproduzione.png`.
+Non verificato: un registro prodotto dall'app Torque (solo file scritti da
+OBDio o a mano) e il trascinamento del cursore col mouse.
 
 ### Fase 5 — MQTT
 

@@ -282,12 +282,93 @@ con lo stesso nome (data e ora; le sessioni demo hanno il suffisso `_DEMO`):
 **Apri la cartella** (in *Sensori* dopo una registrazione, oppure
 in *Sessioni salvate*) la mostra in Esplora file. Nella scheda **Sessioni
 salvate** scegli una sessione per rivedere grafici e diagnosi senza collegare
-il veicolo; **Esporta CSV** riscrive il CSV.
+il veicolo; **Esporta…** la scrive in un altro formato (vedi sotto).
 
 Il formato del CSV è descritto in [docs/FORMATO_CSV.md](docs/FORMATO_CSV.md).
 In breve: UTF-8, una riga per campione, colonne
 `timestamp, tempo_s, ecu, parametro, descrizione, valore, unita, stato, origine`;
 le letture mancanti hanno `valore` vuoto e uno `stato` esplicito.
+
+## Importare ed esportare le sessioni
+
+Nella scheda **Sessioni salvate**:
+
+- **Esporta…** (per la sessione aperta) offre quattro formati:
+  - *Sessione OBDio (.obdio.jsonl)*: una copia del file, riapribile e
+    importabile su un altro PC;
+  - *CSV OBDio*: una riga per campione, il formato descritto sopra;
+  - *CSV in stile Torque*: una riga per istante, una colonna `Nome(unità)` per
+    parametro, `-` dove la lettura non ha dato un valore, per gli strumenti che
+    leggono i registri di Torque (`trackLog.csv`);
+  - *Diagnosi in JSON*: la diagnosi registrata nella sessione, senza VIN.
+- **Importa…** legge una sessione OBDio, un CSV OBDio o un CSV in stile
+  Torque; il formato si riconosce dal contenuto. Prima di salvare compare un
+  riepilogo: formato, campioni, parametri riconosciuti, colonne conservate come
+  parametri liberi, righe saltate e perché. **Salva e apri** crea nella cartella
+  delle sessioni un file `…_IMPORTATA_<nome del file>.obdio.jsonl`; il file
+  d'origine non viene toccato.
+
+La scelta del file avviene scrivendo il percorso in un campo, con l'elenco dei
+file adatti della cartella sotto (la finestra di sistema non è disponibile con
+la versione di Rust usata). La cartella proposta è *Documenti*. Dopo
+l'esportazione l'app dice dove ha scritto il file, con **Apri la cartella**.
+
+Regole che valgono sempre: un dato assente non diventa mai zero (in un CSV di
+Torque `-` è importato come «risposta mancante» senza valore), nulla viene
+scartato in silenzio (le colonne sconosciute di Torque diventano parametri
+liberi con nome e unità, visibili in Sensori, grafici e cruscotto), un CSV
+salvato da Excel in italiano (punto e virgola, virgola decimale) è accettato.
+CSV OBDio esportato e reimportato restituisce esattamente gli stessi campioni,
+stati, marcatori e origine. Il CSV in stile Torque invece non porta con sé
+marcatori, centralina, diagnosi né l'indicazione «demo»: una sessione demo
+esportata così e reimportata risulta come dati di veicolo. Tabelle delle
+colonne di Torque riconosciute, conversioni di unità (°F, mph, psi) e dettagli
+in [docs/FORMATO_CSV.md](docs/FORMATO_CSV.md).
+
+> **Verifica.** Il formato Torque è stato provato solo con file scritti da
+> OBDio e con un registro scritto a mano secondo le convenzioni documentate:
+> **nessun registro prodotto dall'app Torque su un telefono** è stato
+> importato. I nomi delle colonne di Torque riconosciuti sono scritti secondo
+> le convenzioni note di Torque e **non sono stati confrontati con un registro
+> reale**: una colonna con un nome diverso resta comunque, come parametro
+> libero.
+
+## Rivivere una sessione (riproduzione)
+
+Una sessione salvata o importata si può **rivivere**: i campioni scorrono nel
+tempo ed entrano per la stessa strada dei dati dal vivo, quindi cruscotto,
+pagina Sensori, grafici e MQTT funzionano come con l'auto collegata.
+
+![Riproduzione con il cruscotto «Guida»](docs/schermate/riproduzione.png)
+
+- Da **Sessioni salvate**: apri la sessione e premi **Rivivi questa
+  sessione**. Dalla scheda **Connessione**: **Riproduci una sessione…**.
+  Con un adattatore collegato la riproduzione non parte: scollegalo prima
+  (l'app offre il pulsante).
+- Sotto la barra superiore, su ogni pagina, compaiono la fascia arancione
+  «RIPRODUZIONE — dati registrati il …» (con «sessione demo» se lo era) e la
+  **barra di trasporto**: riproduci/pausa, salto al marcatore precedente o
+  successivo, posizione trascinabile con le tacche dei marcatori (passandoci
+  sopra se ne legge il nome), tempo `mm:ss / mm:ss`, velocità 0,5×, 1×, 2×,
+  5×, 10×, **Ripeti** e **Chiudi riproduzione**.
+- Alla fine la riproduzione si ferma sull'ultimo istante («Ricomincia» la fa
+  ripartire); con **Ripeti** riparte dall'inizio.
+- Dopo un salto di posizione i grafici ripartono vuoti dal punto scelto: nulla
+  di quanto precede viene riproposto e nessuna linea attraversa il salto.
+- Durante la riproduzione **non si registra, non si aggiungono marcatori, non
+  si legge né si cancella la diagnosi**: i pulsanti sono disattivati con la
+  spiegazione e il thread di lavoro rifiuta comunque i comandi. La diagnosi
+  mostrata è quella registrata nella sessione.
+- Scorrono **tutti** i dati della sessione: la selezione dei sensori decide
+  solo che cosa mostrare. Gli strumenti di un parametro assente nella sessione
+  mostrano «Non supportato».
+- Su MQTT i dati riprodotti escono con `"origine": "riproduzione"`, mai come
+  dati del veicolo; la diagnosi registrata non viene pubblicata (l'argomento
+  trattenuto `diagnosi` descrive lo stato attuale del veicolo).
+
+Il tempo dei grafici è la posizione nella sessione (secondi dalla sua
+partenza), non l'ora del PC; data e ora originali di ogni campione restano
+quelle registrate.
 
 ### Riepilogo e VIN
 
@@ -403,7 +484,7 @@ non è verificabile: è un'ipotesi, non un dato.
 
 | Verifica | Esito |
 |---|---|
-| Test automatici (145): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
+| Test automatici (176): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
 | Flusso demo attraverso il thread di lavoro reale: collegamento, P0420, fermo immagine, polling con priorità alle sonde, registrazione, CSV, riapertura | Superato |
 | Distanza parziale attraverso il thread di lavoro reale: campioni monotoni in km, registrati nella sessione e nel CSV | Superato |
 | Cancellazione dei codici in demo attraverso il thread di lavoro reale: copia della diagnosi, servizio 04, rilettura con P0420 solo permanente, MIL spenta, prontezza azzerata | Superato |
@@ -414,6 +495,10 @@ non è verificabile: è un'ipotesi, non un dato.
 | Interfaccia in demo, con schermate: connessione, diagnosi, fermo immagine, grafici con buco del dato e marcatori, pagina Sensori (confronto e un grafico per sensore con dieci sensori), sessione riaperta | Superato |
 | Cruscotto in demo, con schermate: «Guida» in movimento, «Diagnosi P0420» con l'interruzione della sonda a valle, modo Modifica con ispettore, una pagina con i sette tipi (parametro non supportato, risposta mancante), layout stretto a 420 px, lettura avviata e fermata dal cruscotto | Superato; trascinamenti e ridimensionamenti col mouse **non provati** dal collaudo automatico |
 | Nuovi PID (contachilometri, pedale, coppia, consumo, pressioni…) su un veicolo reale | **Non provati**: formule da Wikipedia, verificate solo con test sui valori; quelle dei PID 49, 4A e 4C sono dedotte |
+| Riproduzione attraverso il thread di lavoro reale: sessione demo registrata, riaperta e rivissuta a 10× con gli stessi campioni (letture fallite comprese) e marcatori; pausa, salto avanti e indietro, ripetizione; registrazione, marcatori, lettura e cancellazione della diagnosi rifiutati; MQTT con origine «riproduzione»; sessione Torque importata con parametri liberi | Superato |
+| Importazione ed esportazione: andata e ritorno esatti del CSV OBDio, CSV in stile Torque scritto e riletto, conversioni °F/mph/psi, file troncati, colonne in più o in meno, byte non UTF-8, BOM, CR LF e LF, CSV di Excel in italiano, intestazione ripetuta o sola | Superato (test automatici) |
+| Importazione di un registro prodotto davvero dall'app Torque | **Non provata**: solo file scritti da OBDio o a mano |
+| Riproduzione, importazione ed esportazione nell'interfaccia, in demo | Schermate dal collaudo automatico (esportazione Torque, anteprima dell'importazione, riproduzione con il cruscotto «Guida», salto e pausa con la pagina Sensori); trascinamento del cursore col mouse **non provato** |
 | Scansione BLE reale su un PC Windows 11 | Funziona (dispositivi elencati); nessun Carista presente |
 | Connessione BLE a un adattatore reale | **Non provata** |
 | Connessione seriale/SPP a un adattatore reale | **Non provata** |

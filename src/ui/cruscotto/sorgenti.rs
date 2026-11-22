@@ -53,10 +53,24 @@ impl Risolta {
 /// collegata), altrimenti se la centralina lo dichiara. I parametri calcolati
 /// sono supportati se lo è la loro sorgente.
 pub fn supportato(chiave: &str, unione: Option<&BTreeSet<u8>>) -> Option<bool> {
+    supportato_con(chiave, unione, &BTreeSet::new())
+}
+
+/// Come [`supportato`], con i parametri liberi offerti dalla sorgente
+/// collegata (`liberi`: in riproduzione, quelli presenti nella sessione). Un
+/// veicolo vero non offre mai parametri liberi.
+pub fn supportato_con(
+    chiave: &str,
+    unione: Option<&BTreeSet<u8>>,
+    liberi: &BTreeSet<String>,
+) -> Option<bool> {
     let Some(p) = pids::per_key(chiave) else {
         return Some(false);
     };
     let unione = unione?;
+    if p.libero {
+        return Some(liberi.contains(chiave));
+    }
     let pid = if p.derivato {
         match pids::sorgente_derivato(chiave).and_then(pids::per_key) {
             Some(s) => s.pid,
@@ -271,6 +285,18 @@ mod tests {
         assert_eq!(supportato("temp_olio", Some(&unione)), Some(false));
         assert_eq!(supportato("giri", None), None);
         assert_eq!(supportato("ignoto", None), Some(false));
+        // Un parametro libero è supportato solo se la sorgente lo offre.
+        pids::registra_libero("prova:sorgenti_libero", "Libero", "x", 1);
+        let liberi = BTreeSet::from(["prova:sorgenti_libero".to_string()]);
+        assert_eq!(
+            supportato_con("prova:sorgenti_libero", Some(&unione), &liberi),
+            Some(true)
+        );
+        assert_eq!(
+            supportato("prova:sorgenti_libero", Some(&unione)),
+            Some(false)
+        );
+        assert_eq!(supportato("prova:sorgenti_libero", None), None);
         // La distanza parziale è supportata se lo è la velocità.
         assert_eq!(
             supportato(pids::CHIAVE_DISTANZA_PARZIALE, Some(&unione)),

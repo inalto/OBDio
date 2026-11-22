@@ -4,15 +4,16 @@
 //! scritta in coda man mano. Se l'app o il collegamento si interrompono, tutto
 //! ciò che è già stato scritto resta leggibile.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
 use crate::diagnosis::DiagnosisReport;
-use crate::model::{Marker, Sample, Stato};
+use crate::model::{Marker, Origine, Sample, Stato};
 use crate::obd::pids;
 
 pub const ESTENSIONE: &str = ".obdio.jsonl";
@@ -27,6 +28,95 @@ pub struct Intestazione {
     pub collegamento: String,
     pub protocollo: String,
     pub ecu: Vec<String>,
+    /// Presente solo nelle sessioni create da un'importazione.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub importata: Option<Importata>,
+    /// Nome e unità dei parametri liberi (chiavi fuori dal catalogo, per
+    /// esempio le colonne sconosciute di un CSV di Torque).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parametri: BTreeMap<String, MetaParametro>,
+}
+
+impl Intestazione {
+    /// Origine dei dati registrati (una sessione non è mai una riproduzione).
+    pub fn origine(&self) -> Origine {
+        if self.demo {
+            Origine::Demo
+        } else {
+            Origine::Veicolo
+        }
+    }
+}
+
+/// Da quale file e formato è stata importata una sessione.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Importata {
+    /// Nome del file d'origine (senza cartella).
+    pub file: String,
+    /// Formato riconosciuto, in chiaro (per esempio «CSV in stile Torque»).
+    pub formato: String,
+    /// Data e ora dell'importazione, ISO 8601.
+    pub il: String,
+}
+
+/// Descrizione di un parametro libero.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MetaParametro {
+    pub nome: String,
+    #[serde(default)]
+    pub unita: String,
+    /// Decimali da mostrare; `None`: due.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decimali: Option<usize>,
+}
+
+/// Rende noti all'app i parametri liberi dell'intestazione (vedi
+/// [`pids::registra_libero`]).
+pub fn registra_parametri(i: &Intestazione) {
+    for (k, m) in &i.parametri {
+        pids::registra_libero(k, &m.nome, &m.unita, m.decimali.unwrap_or(2));
+    }
+}
+
+/// Nome leggibile di un parametro della sessione: dal catalogo, altrimenti
+/// dall'intestazione, altrimenti la chiave stessa.
+pub fn nome_parametro(s: &SessionData, key: &str) -> String {
+    if pids::nel_catalogo(key) {
+        return pids::per_key(key)
+            .map(|p| p.nome.clone())
+            .unwrap_or_default();
+    }
+    match s.intestazione.parametri.get(key) {
+        Some(m) if !m.nome.is_empty() => m.nome.clone(),
+        _ => pids::per_key(key)
+            .map(|p| p.nome.clone())
+            .unwrap_or_else(|| key.to_string()),
+    }
+}
+
+/// Decimali usati nei file per un parametro (uno in più di quelli mostrati).
+pub(crate) fn decimali_file(s: &SessionData, key: &str) -> usize {
+    if pids::nel_catalogo(key) {
+        return pids::per_key(key).map(|p| p.decimali + 1).unwrap_or(4);
+    }
+    s.intestazione
+        .parametri
+        .get(key)
+        .and_then(|m| m.decimali)
+        .map(|d| d + 1)
+        .unwrap_or(4)
+}
+
+/// Numero per i file CSV: con `decimali` cifre se così si rilegge il valore
+/// esatto, altrimenti con tutte le cifre necessarie (mai in notazione
+/// esponenziale). Così l'esportazione non perde precisione.
+pub fn numero_csv(v: f64, decimali: usize) -> String {
+    let fisso = format!("{v:.decimali$}");
+    if fisso.parse::<f64>().ok() == Some(v) {
+        fisso
+    } else {
+        format!("{v}")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -204,14 +294,19 @@ pub struct SessionData {
 }
 
 pub fn carica(percorso: &Path) -> Result<SessionData, String> {
-    let file = File::open(percorso).map_err(|e| format!("impossibile aprire il file: {e}"))?;
-    let mut s = SessionData {
-        percorso: percorso.to_path_buf(),
-        ..Default::default()
-    };
+    let byte = fs::read(percorso).map_err(|e| format!("impossibile aprire il file: {e}"))?;
+    let mut s = leggi(&String::from_utf8_lossy(&byte))?;
+    s.percorso = percorso.to_path_buf();
+    Ok(s)
+}
+
+/// Interpreta il testo di una sessione `.obdio.jsonl`. Le righe illeggibili
+/// (per esempio l'ultima, troncata) sono contate e saltate. I parametri liberi
+/// dell'intestazione vengono registrati.
+pub fn leggi(testo: &str) -> Result<SessionData, String> {
+    let mut s = SessionData::default();
     let mut intestazione_vista = false;
-    for riga in BufReader::new(file).lines() {
-        let riga = riga.map_err(|e| format!("errore di lettura: {e}"))?;
+    for riga in testo.lines() {
         let riga = riga.trim_start_matches('\u{feff}').trim();
         if riga.is_empty() {
             continue;
@@ -230,7 +325,69 @@ pub fn carica(percorso: &Path) -> Result<SessionData, String> {
     if !intestazione_vista {
         return Err("il file non è una sessione OBDio (intestazione mancante)".into());
     }
+    registra_parametri(&s.intestazione);
     Ok(s)
+}
+
+/// Testo `.obdio.jsonl` della sessione: intestazione, diagnosi, poi campioni
+/// e marcatori in ordine di tempo.
+pub fn testo_sessione(s: &SessionData) -> Result<String, String> {
+    enum Voce<'a> {
+        C(&'a Sample),
+        M(&'a Marker),
+    }
+    let mut voci: Vec<(f64, Voce)> = s
+        .campioni
+        .iter()
+        .map(|c| (c.t, Voce::C(c)))
+        .chain(s.marcatori.iter().map(|m| (m.t, Voce::M(m))))
+        .collect();
+    voci.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out = String::new();
+    let mut riga = |r: &Record| -> Result<(), String> {
+        out.push_str(&serde_json::to_string(r).map_err(|e| e.to_string())?);
+        out.push('\n');
+        Ok(())
+    };
+    riga(&Record::Intestazione(s.intestazione.clone()))?;
+    if let Some(d) = &s.diagnosi {
+        riga(&Record::Diagnosi(Box::new(d.clone())))?;
+    }
+    for (_, v) in voci {
+        match v {
+            Voce::C(c) => riga(&Record::Campione(c.clone()))?,
+            Voce::M(m) => riga(&Record::Marcatore(m.clone()))?,
+        }
+    }
+    Ok(out)
+}
+
+/// Salva la sessione in un file nuovo nella cartella, con il nome
+/// `<base>.obdio.jsonl` (o `<base>_2…` se esiste già), e ne restituisce il
+/// percorso. Non sovrascrive mai.
+pub fn salva_nuova(cartella: &Path, base: &str, s: &SessionData) -> Result<PathBuf, String> {
+    fs::create_dir_all(cartella)
+        .map_err(|e| format!("impossibile creare la cartella {}: {e}", cartella.display()))?;
+    let testo = testo_sessione(s)?;
+    let mut n = 1;
+    loop {
+        let nome = if n == 1 {
+            format!("{base}{ESTENSIONE}")
+        } else {
+            format!("{base}_{n}{ESTENSIONE}")
+        };
+        let percorso = cartella.join(nome);
+        match File::create_new(&percorso) {
+            Ok(mut f) => {
+                f.write_all(testo.as_bytes())
+                    .and_then(|_| f.sync_all())
+                    .map_err(|e| format!("impossibile scrivere {}: {e}", percorso.display()))?;
+                return Ok(percorso);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && n < 1000 => n += 1,
+            Err(e) => return Err(format!("impossibile creare {}: {e}", percorso.display())),
+        }
+    }
 }
 
 /// Elenco delle sessioni salvate, dalla più recente.
@@ -261,7 +418,7 @@ pub fn percorso_csv(sessione: &Path) -> PathBuf {
     sessione.with_file_name(format!("{base}.csv"))
 }
 
-fn campo(s: &str) -> String {
+pub(crate) fn campo(s: &str) -> String {
     if s.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
@@ -286,11 +443,7 @@ pub fn csv(s: &SessionData) -> String {
         .collect();
     righe.sort_by(|a, b| a.0.total_cmp(&b.0));
 
-    let origine = if s.intestazione.demo {
-        "demo_sintetico"
-    } else {
-        "veicolo"
-    };
+    let origine = s.intestazione.origine().codice();
     // BOM UTF-8: serve a Excel per riconoscere la codifica.
     let mut out = String::from("\u{feff}");
     out.push_str(INTESTAZIONE_CSV);
@@ -298,19 +451,17 @@ pub fn csv(s: &SessionData) -> String {
     for (_, riga) in righe {
         let colonne: [String; 9] = match riga {
             Riga::C(c) => {
-                let descrizione = pids::per_key(&c.key)
-                    .map(|p| p.nome.clone())
-                    .unwrap_or_default();
+                let descrizione = nome_parametro(s, &c.key);
+                // Mai uno zero al posto di un dato assente: valore vuoto.
                 let valore = match (c.stato, c.valore) {
-                    (Stato::Ok, Some(v)) => {
-                        let decimali = pids::per_key(&c.key).map(|p| p.decimali + 1).unwrap_or(4);
-                        format!("{v:.decimali$}")
+                    (Stato::Ok, Some(v)) if v.is_finite() => {
+                        numero_csv(v, decimali_file(s, &c.key))
                     }
                     _ => String::new(),
                 };
                 [
                     c.ts.clone(),
-                    format!("{:.3}", c.t),
+                    numero_csv(c.t, 3),
                     c.ecu.clone(),
                     c.key.clone(),
                     descrizione,
@@ -322,7 +473,7 @@ pub fn csv(s: &SessionData) -> String {
             }
             Riga::M(m) => [
                 m.ts.clone(),
-                format!("{:.3}", m.t),
+                numero_csv(m.t, 3),
                 String::new(),
                 "marcatore".to_string(),
                 m.etichetta.clone(),
@@ -385,6 +536,7 @@ mod tests {
             collegamento: "demo".into(),
             protocollo: "CAN".into(),
             ecu: vec!["7E8".into()],
+            ..Default::default()
         };
         let mut rec = Recorder::avvia(&dir, &int, None, 100.0).unwrap();
         rec.campione(&campione(100.5, "giri", Some(2128.0), Stato::Ok))
@@ -471,6 +623,69 @@ mod tests {
         assert!(carica(&p).is_err());
         assert_eq!(elenca(&dir), vec![p.clone()]);
         assert_eq!(percorso_csv(&p), dir.join("x.csv"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn numeri_csv_senza_perdita() {
+        assert_eq!(numero_csv(2128.0, 1), "2128.0");
+        assert_eq!(numero_csv(0.5, 3), "0.500");
+        // Con i decimali fissi non si rileggerebbe lo stesso valore.
+        assert_eq!(numero_csv(2128.25, 1), "2128.25");
+        assert_eq!(numero_csv(1.0 / 3.0, 3), "0.3333333333333333");
+        assert_eq!(numero_csv(1e-7, 2), "0.0000001");
+        for v in [0.1 + 0.2, 33.333_333_333_333_336, -40.0, 1e15 + 0.5] {
+            assert_eq!(numero_csv(v, 2).parse::<f64>().unwrap(), v);
+        }
+    }
+
+    #[test]
+    fn sessione_nuova_mai_sovrascritta_e_parametri_liberi() {
+        let dir = cartella("nuova");
+        let mut s = SessionData {
+            intestazione: Intestazione {
+                versione: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        s.intestazione.parametri.insert(
+            "prova:recording_libero".into(),
+            MetaParametro {
+                nome: "Pressione turbo".into(),
+                unita: "bar".into(),
+                decimali: Some(2),
+            },
+        );
+        s.campioni
+            .push(campione(1.0, "giri", Some(900.0), Stato::Ok));
+        s.marcatori.push(Marker {
+            t: 0.5,
+            ts: String::new(),
+            etichetta: "m".into(),
+        });
+        let a = salva_nuova(&dir, "base", &s).unwrap();
+        let b = salva_nuova(&dir, "base", &s).unwrap();
+        assert_ne!(a, b);
+        assert!(b.to_string_lossy().ends_with("base_2.obdio.jsonl"));
+        let r = carica(&a).unwrap();
+        assert_eq!(r.intestazione.parametri, s.intestazione.parametri);
+        assert_eq!(r.campioni, s.campioni);
+        // Caricare la sessione rende noto il parametro libero.
+        let p = pids::per_key("prova:recording_libero").unwrap();
+        assert_eq!((p.nome.as_str(), p.unita), ("Pressione turbo", "bar"));
+        assert_eq!(
+            nome_parametro(&r, "prova:recording_libero"),
+            "Pressione turbo"
+        );
+        assert_eq!(nome_parametro(&r, "giri"), "Giri motore");
+        // Un'intestazione senza i campi nuovi si legge come prima.
+        let vecchia = r#"{"tipo":"intestazione","versione":1,"creata":"x","demo":false,"adattatore":"a","collegamento":"c","protocollo":"p","ecu":[]}"#;
+        let v = leggi(vecchia).unwrap();
+        assert!(v.intestazione.importata.is_none() && v.intestazione.parametri.is_empty());
+        // E una nuova senza parametri liberi non scrive i campi nuovi.
+        let t = testo_sessione(&v).unwrap();
+        assert!(!t.contains("parametri") && !t.contains("importata"));
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -27,6 +27,17 @@ impl Stato {
         }
     }
 
+    /// Il contrario di [`Stato::codice`].
+    pub fn da_codice(codice: &str) -> Option<Self> {
+        match codice.trim() {
+            "ok" => Some(Stato::Ok),
+            "non_supportato" => Some(Stato::NonSupportato),
+            "risposta_mancante" => Some(Stato::RispostaMancante),
+            "errore_comunicazione" => Some(Stato::ErroreComunicazione),
+            _ => None,
+        }
+    }
+
     /// Testo mostrato all'utente.
     pub fn etichetta(self) -> &'static str {
         match self {
@@ -34,6 +45,40 @@ impl Stato {
             Stato::NonSupportato => "Non supportato",
             Stato::RispostaMancante => "Risposta mancante",
             Stato::ErroreComunicazione => "Errore di comunicazione",
+        }
+    }
+}
+
+/// Da dove arrivano i dati mostrati, pubblicati o esportati.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origine {
+    /// Letti da una centralina vera.
+    #[default]
+    Veicolo,
+    /// Prodotti dal simulatore integrato (dati sintetici).
+    Demo,
+    /// Una sessione registrata che viene «rivissuta»: non sono dati attuali.
+    Riproduzione,
+}
+
+impl Origine {
+    /// Codice stabile usato nei file (colonna `origine` del CSV) e su MQTT.
+    pub fn codice(self) -> &'static str {
+        match self {
+            Origine::Veicolo => "veicolo",
+            Origine::Demo => "demo_sintetico",
+            Origine::Riproduzione => "riproduzione",
+        }
+    }
+
+    /// Il contrario di [`Origine::codice`].
+    pub fn da_codice(codice: &str) -> Option<Self> {
+        match codice.trim() {
+            "veicolo" => Some(Origine::Veicolo),
+            "demo_sintetico" => Some(Origine::Demo),
+            "riproduzione" => Some(Origine::Riproduzione),
+            _ => None,
         }
     }
 }
@@ -117,5 +162,22 @@ mod tests {
         assert_eq!(num_it_segno(8.59375, 2), "+8,59");
         assert_eq!(num_it_segno(-1.0, 1), "−1,0");
         assert_eq!(num_it(1234567.5, 1), "1.234.567,5");
+    }
+
+    #[test]
+    fn codici_di_stato_e_origine_reversibili() {
+        for s in [
+            Stato::Ok,
+            Stato::NonSupportato,
+            Stato::RispostaMancante,
+            Stato::ErroreComunicazione,
+        ] {
+            assert_eq!(Stato::da_codice(s.codice()), Some(s));
+        }
+        for o in [Origine::Veicolo, Origine::Demo, Origine::Riproduzione] {
+            assert_eq!(Origine::da_codice(o.codice()), Some(o));
+        }
+        assert_eq!(Stato::da_codice("marcatore"), None);
+        assert_eq!(Origine::da_codice("altro"), None);
     }
 }

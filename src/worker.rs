@@ -10,12 +10,14 @@ use std::time::{Duration, Instant};
 
 use crate::diagnosis::{self, Contesto, DiagnosisReport};
 use crate::elm::{ConfermaCancellazione, Elm, ElmError, Esito, EsitoCancellazione};
-use crate::model::{Marker, Sample, Stato, adesso_iso};
+use crate::model::{Marker, Origine, Sample, Stato, adesso_iso};
 use crate::mqtt::{MqttConfig, MqttPublisher, StatoMqtt, StatoMqttInfo};
 use crate::obd::ObdRequest;
 use crate::obd::frames::BusKind;
 use crate::obd::pids::{self, Decodifica};
-use crate::recording::{self, Intestazione, Recorder};
+use crate::recording::{self, Intestazione, Recorder, SessionData};
+use crate::riproduzione::{self, Riproduttore};
+pub use crate::riproduzione::{ComandoRiproduzione, StatoRiproduzione};
 use crate::transport::Transport;
 use crate::transport::ble::{BleDispositivo, BleErrore, BleManager, GattInfo};
 use crate::transport::demo::DemoTransport;
@@ -32,6 +34,9 @@ pub enum Sorgente {
     Demo,
     /// Trasporto già pronto (verifiche automatiche).
     Trasporto(Box<dyn Transport>),
+    /// Sessione registrata da «rivivere»: i suoi campioni scorrono nel tempo
+    /// e arrivano come quelli dal vivo (vedi [`crate::riproduzione`]).
+    Riproduzione(Box<SessionData>),
 }
 
 pub enum Comando {
@@ -45,6 +50,8 @@ pub enum Comando {
     /// della diagnosi. Richiede la conferma dell'utente.
     CancellaDtc(ConfermaCancellazione),
     /// Avvia o aggiorna il polling; `prioritarie` sono le chiavi delle sonde.
+    /// Durante la riproduzione è accettato e ignorato (come `FermaPolling`):
+    /// scorrono sempre tutti i campioni della sessione.
     AvviaPolling {
         chiavi: Vec<String>,
         prioritarie: Vec<String>,
@@ -55,6 +62,8 @@ pub enum Comando {
     Marcatore(String),
     /// Avvia, riavvia o ferma la pubblicazione MQTT secondo la configurazione.
     ConfiguraMqtt(MqttConfig),
+    /// Barra di trasporto della riproduzione (ignorato senza riproduzione).
+    Riproduzione(ComandoRiproduzione),
     Esci,
 }
 
@@ -85,6 +94,8 @@ pub enum ErroreUtente {
     Registrazione(String),
     /// La cancellazione dei codici guasto non è stata nemmeno tentata.
     CancellazioneNonEseguita(String),
+    /// Operazione rifiutata perché è in corso la riproduzione di una sessione.
+    Riproduzione(String),
     Altro(String),
 }
 
@@ -100,6 +111,7 @@ impl ErroreUtente {
             ErroreUtente::CollegamentoPerso(_) => "Collegamento interrotto",
             ErroreUtente::Registrazione(_) => "Errore di registrazione",
             ErroreUtente::CancellazioneNonEseguita(_) => "Codici guasto non cancellati",
+            ErroreUtente::Riproduzione(_) => "Non disponibile durante la riproduzione",
             ErroreUtente::Altro(_) => "Errore",
         }
     }
@@ -140,7 +152,9 @@ impl ErroreUtente {
             ErroreUtente::CancellazioneNonEseguita(d) => {
                 format!("Nessuna richiesta di cancellazione è stata inviata alla centralina. {d}")
             }
-            ErroreUtente::Registrazione(d) | ErroreUtente::Altro(d) => d.clone(),
+            ErroreUtente::Registrazione(d)
+            | ErroreUtente::Riproduzione(d)
+            | ErroreUtente::Altro(d) => d.clone(),
         }
     }
 }
@@ -148,7 +162,16 @@ impl ErroreUtente {
 /// Informazioni sul collegamento stabilito.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct InfoConn {
+    /// Vero se i dati sono sintetici: simulatore dal vivo, oppure
+    /// riproduzione di una sessione registrata in demo.
     pub demo: bool,
+    /// Da dove arrivano i dati: veicolo, simulatore o riproduzione.
+    pub origine: Origine,
+    /// Presente durante la riproduzione di una sessione.
+    pub riproduzione: Option<InfoRiproduzione>,
+    /// Parametri liberi (fuori catalogo) offerti dalla sorgente: solo in
+    /// riproduzione di una sessione importata.
+    pub liberi: BTreeSet<String>,
     pub collegamento: String,
     pub adattatore: String,
     pub protocollo: String,
@@ -161,6 +184,25 @@ pub struct InfoConn {
     pub gatt: Option<GattInfo>,
     /// Avvisi sull'interpretazione dei dati (per esempio scale non standard).
     pub avvisi: Vec<String>,
+}
+
+/// Sessione in riproduzione.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InfoRiproduzione {
+    /// Nome del file della sessione.
+    pub file: String,
+    /// Quando la sessione è stata registrata (ISO 8601, dall'intestazione).
+    pub registrata_il: String,
+    /// La sessione era stata registrata in modalità demo.
+    pub sessione_demo: bool,
+    /// Per una sessione importata: «<formato> da «<file>»».
+    pub importata: Option<String>,
+}
+
+impl InfoConn {
+    pub fn in_riproduzione(&self) -> bool {
+        self.origine == Origine::Riproduzione
+    }
 }
 
 pub enum Evento {
@@ -194,6 +236,15 @@ pub enum Evento {
     Registro(Vec<String>),
     /// Stato della pubblicazione MQTT (a ogni cambiamento, al più due volte al secondo).
     Mqtt(StatoMqttInfo),
+    /// Stato della riproduzione: a ogni cambiamento e alcune volte al secondo
+    /// mentre scorre.
+    Riproduzione(StatoRiproduzione),
+    /// La posizione della riproduzione è saltata (comando «vai a» o ripetizione
+    /// dall'inizio): l'interfaccia svuota i grafici dal vivo, così nessuna
+    /// linea attraversa il salto. I campioni successivi partono da `posizione`.
+    Salto {
+        posizione: f64,
+    },
 }
 
 /// Esito della cancellazione dei codici guasto visto dall'interfaccia.
@@ -223,7 +274,11 @@ pub struct Piano {
 impl Piano {
     pub fn new(chiavi: &[String], prioritarie: &[String], supportati: &BTreeSet<u8>) -> Self {
         // I parametri calcolati dall'app non hanno un PID da richiedere.
-        let pid_di = |k: &String| pids::per_key(k).filter(|p| !p.derivato).map(|p| p.pid);
+        let pid_di = |k: &String| {
+            pids::per_key(k)
+                .filter(|p| !p.derivato && !p.libero)
+                .map(|p| p.pid)
+        };
         let mut veloci: Vec<u8> = Vec::new();
         for pid in prioritarie.iter().filter_map(pid_di) {
             if supportati.contains(&pid) && !veloci.contains(&pid) {
@@ -338,6 +393,17 @@ enum FineCancellazione {
 /// Errori consecutivi di comunicazione oltre i quali il collegamento è dato per perso.
 const MAX_ERRORI_DI_FILA: u32 = 5;
 const DURATA_SCANSIONE: Duration = Duration::from_secs(40);
+/// Passo del ciclo durante la riproduzione.
+const PASSO_RIPRODUZIONE: Duration = Duration::from_millis(20);
+/// Intervallo fra due stati della riproduzione mentre scorre.
+const INTERVALLO_STATO_RIPRODUZIONE: Duration = Duration::from_millis(250);
+
+/// Riproduzione in corso (al posto di un collegamento).
+struct Riproduzione {
+    motore: Riproduttore,
+    ultimo_passo: Instant,
+    inviato: Option<(StatoRiproduzione, Instant)>,
+}
 
 struct Worker {
     rx: Receiver<Comando>,
@@ -348,6 +414,7 @@ struct Worker {
     ble: Option<BleManager>,
     scansione: Option<(Instant, Instant)>,
     link: Option<Link>,
+    riproduzione: Option<Riproduzione>,
     mqtt: Option<MqttPublisher>,
     /// Ultimo stato MQTT comunicato all'interfaccia e quando.
     mqtt_inviato: Option<(StatoMqttInfo, Instant)>,
@@ -373,6 +440,7 @@ pub fn avvia(
                 ble: None,
                 scansione: None,
                 link: None,
+                riproduzione: None,
                 mqtt: None,
                 mqtt_inviato: None,
             }
@@ -396,6 +464,15 @@ impl Worker {
         loop {
             let occupato =
                 self.scansione.is_some() || self.link.as_ref().is_some_and(|l| l.piano.is_some());
+            let attesa = if self
+                .riproduzione
+                .as_ref()
+                .is_some_and(|r| r.motore.in_corso())
+            {
+                PASSO_RIPRODUZIONE
+            } else {
+                Duration::from_millis(250)
+            };
             let cmd = if occupato {
                 match self.rx.try_recv() {
                     Ok(c) => Some(c),
@@ -403,7 +480,7 @@ impl Worker {
                     Err(TryRecvError::Disconnected) => Some(Comando::Esci),
                 }
             } else {
-                match self.rx.recv_timeout(Duration::from_millis(250)) {
+                match self.rx.recv_timeout(attesa) {
                     Ok(c) => Some(c),
                     Err(RecvTimeoutError::Timeout) => None,
                     Err(RecvTimeoutError::Disconnected) => Some(Comando::Esci),
@@ -416,10 +493,12 @@ impl Worker {
             }
             self.passo_scansione();
             self.passo_polling();
+            self.passo_riproduzione();
             self.passo_mqtt();
         }
         self.ferma_scansione();
         self.chiudi_link(None, false);
+        self.chiudi_riproduzione(false);
         if let Some(m) = self.mqtt.take() {
             m.ferma();
         }
@@ -441,7 +520,9 @@ impl Worker {
         match MqttPublisher::avvia(&config) {
             Ok(m) => {
                 if let Some(l) = &self.link {
-                    m.collegato(l.info.demo);
+                    m.collegato_origine(l.info.origine);
+                } else if self.riproduzione.is_some() {
+                    m.collegato_origine(Origine::Riproduzione);
                 }
                 self.mqtt = Some(m);
                 self.passo_mqtt();
@@ -506,8 +587,21 @@ impl Worker {
                     self.stato(StatoConn::Disconnessione);
                     self.chiudi_link(None, true);
                 }
+                if self.riproduzione.is_some() {
+                    self.stato(StatoConn::Disconnessione);
+                    self.chiudi_riproduzione(true);
+                }
             }
+            Comando::LeggiDiagnosi if self.riproduzione.is_some() => self.rifiuta(
+                "Durante la riproduzione non c'è una centralina da leggere: la diagnosi \
+                 mostrata è quella registrata nella sessione. Chiudi la riproduzione e collega \
+                 l'adattatore per una lettura nuova.",
+            ),
             Comando::LeggiDiagnosi => self.leggi_diagnosi(),
+            Comando::CancellaDtc(_) if self.riproduzione.is_some() => self.rifiuta(
+                "Durante la riproduzione i codici guasto non si possono cancellare: i dati sono \
+                 registrati e nessuna centralina è collegata. Nulla è stato inviato.",
+            ),
             Comando::CancellaDtc(conferma) => self.cancella_dtc(conferma),
             Comando::AvviaPolling {
                 chiavi,
@@ -528,9 +622,18 @@ impl Worker {
                     self.invia(Evento::Polling(false));
                 }
             }
+            Comando::AvviaRegistrazione if self.riproduzione.is_some() => self.rifiuta(
+                "Durante la riproduzione non si registra: la sessione è già registrata. Per \
+                 salvarne una copia in un altro formato usa «Esporta…» nella scheda Sessioni.",
+            ),
             Comando::AvviaRegistrazione => self.avvia_registrazione(),
             Comando::FermaRegistrazione => self.ferma_registrazione(),
             Comando::ConfiguraMqtt(config) => self.configura_mqtt(config),
+            Comando::Riproduzione(c) => self.comando_riproduzione(c),
+            Comando::Marcatore(_) if self.riproduzione.is_some() => self.rifiuta(
+                "Durante la riproduzione non si aggiungono marcatori: si vedono quelli già \
+                 registrati nella sessione.",
+            ),
             Comando::Marcatore(etichetta) => {
                 let Some(l) = self.link.as_mut() else {
                     return true;
@@ -595,7 +698,7 @@ impl Worker {
     }
 
     fn avvia_scansione(&mut self) {
-        if self.link.is_some() {
+        if self.link.is_some() || self.riproduzione.is_some() {
             return;
         }
         let esito = self.ble().and_then(|b| b.avvia_scansione());
@@ -649,10 +752,14 @@ impl Worker {
     // ---- Connessione ---------------------------------------------------
 
     fn collega(&mut self, sorgente: Sorgente) {
-        if self.link.is_some() {
+        if self.link.is_some() || self.riproduzione.is_some() {
             return;
         }
         self.ferma_scansione();
+        let sorgente = match sorgente {
+            Sorgente::Riproduzione(s) => return self.collega_riproduzione(*s),
+            altra => altra,
+        };
         self.stato(StatoConn::Connessione(
             "Collegamento all'adattatore…".into(),
         ));
@@ -662,6 +769,7 @@ impl Worker {
         let trasporto: Box<dyn Transport> = match sorgente {
             Sorgente::Demo => Box::new(DemoTransport::new()),
             Sorgente::Trasporto(t) => t,
+            Sorgente::Riproduzione(_) => unreachable!("gestita sopra"),
             Sorgente::Seriale { porta, baud } => match SerialTransport::apri(&porta, baud) {
                 Ok(t) => Box::new(t),
                 Err(e) => {
@@ -757,8 +865,16 @@ impl Worker {
         }
         self.invia(Evento::Registro(elm.prendi_registro()));
 
+        let demo = elm.is_demo();
         let info = InfoConn {
-            demo: elm.is_demo(),
+            demo,
+            origine: if demo {
+                Origine::Demo
+            } else {
+                Origine::Veicolo
+            },
+            riproduzione: None,
+            liberi: BTreeSet::new(),
             collegamento: elm.descrizione(),
             adattatore,
             protocollo: format!(
@@ -780,7 +896,7 @@ impl Worker {
         };
         self.invia(Evento::Connesso(Box::new(info.clone())));
         if let Some(m) = &self.mqtt {
-            m.collegato(info.demo);
+            m.collegato_origine(info.origine);
         }
         self.link = Some(Link {
             elm,
@@ -1105,6 +1221,160 @@ impl Worker {
         }
     }
 
+    // ---- Riproduzione --------------------------------------------------
+
+    fn rifiuta(&self, motivo: &str) {
+        self.invia(Evento::Errore(ErroreUtente::Riproduzione(
+            motivo.to_string(),
+        )));
+    }
+
+    /// Avvia la riproduzione: un `Connesso` costruito dall'intestazione della
+    /// sessione, poi la diagnosi registrata, poi i campioni nel tempo.
+    ///
+    /// La diagnosi registrata non viene pubblicata su MQTT: l'argomento
+    /// trattenuto `diagnosi` descrive lo stato attuale del veicolo.
+    fn collega_riproduzione(&mut self, s: SessionData) {
+        recording::registra_parametri(&s.intestazione);
+        let p = riproduzione::presenti(&s);
+        let i = &s.intestazione;
+        let file = s
+            .percorso
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "sessione".into());
+        let mut avvisi = Vec::new();
+        let importata = i
+            .importata
+            .as_ref()
+            .map(|imp| format!("{} da «{}»", imp.formato, imp.file));
+        if let Some(imp) = &importata {
+            avvisi.push(format!("Sessione importata: {imp}."));
+        }
+        let vuoto = |t: &str| {
+            if t.trim().is_empty() {
+                "non indicato".to_string()
+            } else {
+                t.to_string()
+            }
+        };
+        let info = InfoConn {
+            demo: i.demo,
+            origine: Origine::Riproduzione,
+            riproduzione: Some(InfoRiproduzione {
+                file: file.clone(),
+                registrata_il: i.creata.clone(),
+                sessione_demo: i.demo,
+                importata,
+            }),
+            liberi: p.liberi,
+            collegamento: format!("Riproduzione della sessione «{file}»"),
+            adattatore: vuoto(&i.adattatore),
+            protocollo: vuoto(&i.protocollo),
+            protocollo_numero: 0,
+            ecu: if i.ecu.is_empty() {
+                p.ecu
+            } else {
+                i.ecu.clone()
+            },
+            supportati: p.supportati,
+            unione: p.unione,
+            gatt: None,
+            avvisi,
+        };
+        self.invia(Evento::Connesso(Box::new(info)));
+        if let Some(m) = &self.mqtt {
+            m.collegato_origine(Origine::Riproduzione);
+        }
+        if let Some(d) = &s.diagnosi {
+            self.invia(Evento::Diagnosi(Box::new(d.clone())));
+        }
+        self.riproduzione = Some(Riproduzione {
+            motore: Riproduttore::da_sessione(&s),
+            ultimo_passo: Instant::now(),
+            inviato: None,
+        });
+        self.stato(StatoConn::Connesso);
+        self.invia_stato_riproduzione(true);
+    }
+
+    fn comando_riproduzione(&mut self, c: ComandoRiproduzione) {
+        let Some(r) = self.riproduzione.as_mut() else {
+            return;
+        };
+        if c == ComandoRiproduzione::Riprendi {
+            // Il tempo passato in pausa non conta.
+            r.ultimo_passo = Instant::now();
+        }
+        if let Some(posizione) = r.motore.comando(c) {
+            self.invia(Evento::Salto { posizione });
+        }
+        self.invia_stato_riproduzione(true);
+    }
+
+    /// Consegna i campioni il cui momento è arrivato, per la stessa strada dei
+    /// dati dal vivo (interfaccia e MQTT).
+    fn passo_riproduzione(&mut self) {
+        let Some(r) = self.riproduzione.as_mut() else {
+            return;
+        };
+        let ora = Instant::now();
+        let dt = ora.duration_since(r.ultimo_passo).as_secs_f64();
+        r.ultimo_passo = ora;
+        let u = r.motore.avanza(dt);
+        if !u.campioni.is_empty() {
+            if let Some(m) = &self.mqtt {
+                m.campioni(&u.campioni);
+            }
+            self.invia(Evento::Campioni(u.campioni));
+        }
+        for m in u.marcatori {
+            if let Some(mq) = &self.mqtt {
+                mq.marcatore(&m);
+            }
+            self.invia(Evento::Marcatore(m));
+        }
+        if let Some(posizione) = u.salto {
+            self.invia(Evento::Salto { posizione });
+        }
+        self.invia_stato_riproduzione(u.finita_ora || u.salto.is_some());
+    }
+
+    /// Invia lo stato della riproduzione se è cambiato (o, mentre scorre,
+    /// alcune volte al secondo).
+    fn invia_stato_riproduzione(&mut self, forza: bool) {
+        let Some(r) = self.riproduzione.as_mut() else {
+            return;
+        };
+        let s = r.motore.stato();
+        let da_inviare = forza
+            || match &r.inviato {
+                None => true,
+                Some((u, quando)) => {
+                    !u.stesso_salvo_posizione(&s)
+                        || (u.posizione != s.posizione
+                            && quando.elapsed() >= INTERVALLO_STATO_RIPRODUZIONE)
+                }
+            };
+        if da_inviare {
+            r.inviato = Some((s.clone(), Instant::now()));
+            self.invia(Evento::Riproduzione(s));
+        }
+    }
+
+    fn chiudi_riproduzione(&mut self, notifica: bool) {
+        if self.riproduzione.take().is_none() {
+            return;
+        }
+        if let Some(m) = &self.mqtt {
+            m.scollegato();
+        }
+        if notifica {
+            self.invia(Evento::Scollegato { motivo: None });
+            self.stato(StatoConn::Scollegato);
+        }
+    }
+
     // ---- Registrazione -------------------------------------------------
 
     fn avvia_registrazione(&mut self) {
@@ -1122,6 +1392,8 @@ impl Worker {
             collegamento: l.info.collegamento.clone(),
             protocollo: l.info.protocollo.clone(),
             ecu: l.info.ecu.clone(),
+            importata: None,
+            parametri: Default::default(),
         };
         let t_inizio = l.t0.elapsed().as_secs_f64();
         match Recorder::avvia(&self.cartella, &intestazione, l.diagnosi.as_ref(), t_inizio) {

@@ -215,7 +215,8 @@ impl App {
             self.cruscotto.inviato = None;
         }
         if attiva {
-            if !self.collegato() {
+            // In riproduzione i dati scorrono tutti: nulla da chiedere.
+            if !self.collegato() || self.in_riproduzione() {
                 self.cruscotto.inviato = None;
                 self.cruscotto.avviato_da_cruscotto = false;
                 self.cruscotto.auto_tentato = false;
@@ -292,7 +293,11 @@ impl App {
             .unwrap_or_default();
         let valore = match &risolta {
             Risolta::Parametro { chiave, .. } => sorgenti::classifica(
-                sorgenti::supportato(chiave, self.unione()),
+                sorgenti::supportato_con(
+                    chiave,
+                    self.unione(),
+                    self.info.as_ref().map_or(&BTreeSet::new(), |i| &i.liberi),
+                ),
                 self.live.ultimo(chiave),
                 self.live.eta_ultimo(chiave),
             ),

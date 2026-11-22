@@ -203,6 +203,15 @@ alimentano cruscotto, sensori e grafici come se arrivassero dall'auto.
 - La fascia arancione dice «RIPRODUZIONE — dati registrati il …» finché dura.
 - Durante la riproduzione non si può registrare né cancellare codici.
 
+Nota di implementazione (fase 4): fascia e barra stanno sotto la barra
+superiore su ogni pagina. La barra ha, da sinistra: riproduci/pausa (accento
+pieno), marcatore precedente e successivo, `mm:ss / mm:ss` in cifre fisse,
+cursore con tacche `attenzione` sui marcatori, velocità, «Ripeti», «Chiudi
+riproduzione». La fascia della riproduzione aggiunge «sessione demo» quando
+serve e resta distinta da quella della demo dal vivo per il testo, non per il
+colore (lo stesso token `demo`). Il trascinamento del cursore salta alla
+posizione solo al rilascio; un clic su una tacca salta al marcatore.
+
 ## 7. Principi di scrittura
 
 Testi in italiano, brevi, al presente. I pulsanti dicono l'azione

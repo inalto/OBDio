@@ -7,6 +7,8 @@
 //! - [`obd`]: decodifica delle risposte OBD-II;
 //! - [`diagnosis`]: lettura di DTC, prontezza, fermo immagine, Mode 06;
 //! - [`recording`]: sessioni su disco ed esportazione CSV;
+//! - [`scambio`]: importazione ed esportazione (CSV OBDio, CSV in stile Torque, JSON);
+//! - [`riproduzione`]: riproduzione in tempo reale di una sessione registrata;
 //! - [`mqtt`]: pubblicazione in tempo reale su un broker MQTT;
 //! - [`worker`]: thread di lavoro con stati espliciti;
 //! - [`ui`]: interfaccia egui.
@@ -18,6 +20,8 @@ pub mod model;
 pub mod mqtt;
 pub mod obd;
 pub mod recording;
+pub mod riproduzione;
+pub mod scambio;
 pub mod summary;
 pub mod transport;
 pub mod ui;

@@ -4,7 +4,7 @@
 //! più parametri (per esempio lambda e tensione della stessa sonda).
 
 use std::collections::BTreeSet;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 /// Formula di decodifica; i byte sono quelli che seguono il PID.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -55,6 +55,9 @@ pub enum Kind {
     Contatore32,
     /// Grandezza calcolata dall'app: nessun PID, mai richiesta alla centralina.
     Calcolato,
+    /// Parametro «libero» venuto da un file importato (per esempio una
+    /// colonna sconosciuta di un CSV di Torque): nessun PID, mai richiesto.
+    Libero,
 }
 
 /// Raggruppamento dei parametri nella pagina Sensori.
@@ -161,6 +164,9 @@ pub struct Param {
     /// Calcolato dall'app, non letto dalla centralina: escluso dalla
     /// decodifica per PID e mai richiesto.
     pub derivato: bool,
+    /// Parametro libero (fuori dal catalogo) con nome e unità presi da un
+    /// file importato: mai richiesto alla centralina. Vedi [`registra_libero`].
+    pub libero: bool,
 }
 
 fn p(key: &str, pid: u8, nome: &str, unita: &'static str, kind: Kind, decimali: usize) -> Param {
@@ -174,6 +180,7 @@ fn p(key: &str, pid: u8, nome: &str, unita: &'static str, kind: Kind, decimali: 
         con_segno: matches!(kind, Kind::Correzione | Kind::O2Correzione),
         gruppo: gruppo_di(key),
         derivato: kind == Kind::Calcolato,
+        libero: false,
     }
 }
 
@@ -513,8 +520,73 @@ pub fn per_pid(pid: u8) -> impl Iterator<Item = &'static Param> {
         .filter(move |x| x.pid == pid && !x.derivato)
 }
 
+/// Parametro del catalogo o, in mancanza, parametro libero registrato.
 pub fn per_key(key: &str) -> Option<&'static Param> {
-    catalogo().iter().find(|x| x.key == key)
+    catalogo()
+        .iter()
+        .find(|x| x.key == key)
+        .or_else(|| libero(key))
+}
+
+/// Vero se la chiave è nel catalogo dei parametri OBD (non libera).
+pub fn nel_catalogo(key: &str) -> bool {
+    catalogo().iter().any(|x| x.key == key)
+}
+
+fn registro_liberi() -> &'static RwLock<Vec<&'static Param>> {
+    static R: OnceLock<RwLock<Vec<&'static Param>>> = OnceLock::new();
+    R.get_or_init(|| RwLock::new(Vec::new()))
+}
+
+fn libero(key: &str) -> Option<&'static Param> {
+    let r = registro_liberi().read().unwrap_or_else(|e| e.into_inner());
+    r.iter().find(|p| p.key == key).copied()
+}
+
+/// Registra un parametro libero (fuori dal catalogo), con nome e unità presi
+/// dall'intestazione di una sessione importata: da qui in poi l'elenco dei
+/// sensori, i grafici, il cruscotto e le esportazioni lo mostrano con il suo
+/// nome. Le chiavi del catalogo non si possono ridefinire (restituisce
+/// `false`). Registrare di nuovo la stessa chiave con un altro nome o un'altra
+/// unità sostituisce la definizione.
+///
+/// Ogni definizione nuova occupa memoria per tutta la vita del processo (i
+/// parametri sono `&'static`): sono poche decine per file importato.
+pub fn registra_libero(key: &str, nome: &str, unita: &str, decimali: usize) -> bool {
+    if key.is_empty() || nel_catalogo(key) {
+        return false;
+    }
+    let mut r = registro_liberi().write().unwrap_or_else(|e| e.into_inner());
+    let nome = if nome.trim().is_empty() { key } else { nome };
+    if let Some(i) = r.iter().position(|p| p.key == key) {
+        let p = r[i];
+        if p.nome == nome && p.unita == unita && p.decimali == decimali {
+            return true;
+        }
+        r.remove(i);
+    }
+    let unita: &'static str = Box::leak(unita.to_string().into_boxed_str());
+    r.push(Box::leak(Box::new(Param {
+        key: key.to_string(),
+        pid: 0x00,
+        nome: nome.to_string(),
+        unita,
+        kind: Kind::Libero,
+        decimali: decimali.min(6),
+        con_segno: false,
+        gruppo: Gruppo::Altro,
+        derivato: false,
+        libero: true,
+    })));
+    true
+}
+
+/// Parametri liberi registrati finora, in ordine di chiave.
+pub fn liberi() -> Vec<&'static Param> {
+    let r = registro_liberi().read().unwrap_or_else(|e| e.into_inner());
+    let mut v: Vec<&'static Param> = r.clone();
+    v.sort_by(|a, b| a.key.cmp(&b.key));
+    v
 }
 
 /// Esito della decodifica di un parametro.
@@ -566,7 +638,7 @@ pub fn decodifica(par: &Param, d: &[u8]) -> Decodifica {
             _ => None,
         },
         // Non esiste una risposta della centralina da decodificare.
-        Kind::Calcolato => None,
+        Kind::Calcolato | Kind::Libero => None,
     };
     match r {
         Some(v) => Valore(v),
@@ -721,6 +793,29 @@ mod tests {
             Decodifica::Valore(v) => v,
             altro => panic!("{key}: {altro:?}"),
         }
+    }
+
+    #[test]
+    fn parametri_liberi_registrati() {
+        let k = "prova:pids_libero";
+        assert!(per_key(k).is_none());
+        assert!(registra_libero(k, "Pressione olio", "bar", 2));
+        let p = per_key(k).unwrap();
+        assert!(p.libero && !p.derivato && !nel_catalogo(k));
+        assert_eq!(
+            (p.nome.as_str(), p.unita, p.decimali),
+            ("Pressione olio", "bar", 2)
+        );
+        assert_eq!(decodifica(p, &[1, 2]), Decodifica::Corta);
+        assert!(liberi().iter().any(|x| x.key == k));
+        // Mai nella decodifica per PID, e il catalogo non si ridefinisce.
+        assert!(per_pid(0x00).all(|x| x.key != k));
+        assert!(!registra_libero("giri", "Altro nome", "x", 0));
+        assert_eq!(per_key("giri").unwrap().nome, "Giri motore");
+        // Una nuova definizione sostituisce la precedente.
+        assert!(registra_libero(k, "Pressione olio", "psi", 1));
+        assert_eq!(per_key(k).unwrap().unita, "psi");
+        assert_eq!(liberi().iter().filter(|x| x.key == k).count(), 1);
     }
 
     #[test]

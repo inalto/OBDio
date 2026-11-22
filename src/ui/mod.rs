@@ -12,10 +12,13 @@ use crate::diagnosis::DiagnosisReport;
 use crate::model::Stato;
 use crate::obd::pids::PresetP0420;
 use crate::recording::{self, SessionData};
+use crate::riproduzione::data_leggibile;
+use crate::scambio;
 use crate::transport::ble::{BleDispositivo, GattInfo};
 use crate::transport::serial::PortaSeriale;
 use crate::worker::{
-    self, Comando, ErroreUtente, Evento, InfoConn, RisultatoCancellazione, StatoConn,
+    self, Comando, ErroreUtente, Evento, InfoConn, RisultatoCancellazione, Sorgente, StatoConn,
+    StatoRiproduzione,
 };
 
 #[cfg(feature = "collaudo")]
@@ -25,8 +28,11 @@ pub mod dati;
 mod grafici;
 mod impostazioni;
 mod pagine;
+pub(crate) mod scelta_file;
 mod sensori;
+mod sessioni;
 pub(crate) mod tema;
+mod trasporto;
 
 use dati::Archivio;
 pub(crate) use sensori::VistaSensori;
@@ -64,6 +70,23 @@ pub(crate) struct SessioneAperta {
     pub preset: PresetP0420,
     pub extra: Option<String>,
     pub messaggio: Option<String>,
+    /// Riepilogo dell'importazione, se la sessione è appena stata importata.
+    pub riepilogo: Option<scambio::Riepilogo>,
+}
+
+impl SessioneAperta {
+    pub fn new(dati: SessionData, riepilogo: Option<scambio::Riepilogo>) -> Self {
+        let archivio = Archivio::da_sessione(&dati);
+        let preset = PresetP0420::calcola(&archivio.pid_presenti());
+        SessioneAperta {
+            dati,
+            archivio,
+            preset,
+            extra: None,
+            messaggio: None,
+            riepilogo,
+        }
+    }
 }
 
 pub struct App {
@@ -120,6 +143,14 @@ pub struct App {
     pub(crate) aperta: Option<SessioneAperta>,
     pub(crate) caricamento: Option<Receiver<Result<SessionData, String>>>,
     pub(crate) errore_sessione: Option<String>,
+    /// Importazione, esportazione e scelta della sessione da rivivere.
+    pub(crate) sessioni: sessioni::StatoSessioni,
+
+    // Riproduzione
+    /// Stato della riproduzione in corso (barra di trasporto).
+    pub(crate) riproduzione: Option<StatoRiproduzione>,
+    /// Posizione mostrata mentre si trascina il cursore della barra.
+    pub(crate) trascina_posizione: Option<f64>,
 
     // Cruscotto
     pub(crate) cruscotto: cruscotto::StatoCruscotto,
@@ -192,6 +223,9 @@ impl App {
             aperta: None,
             caricamento: None,
             errore_sessione: None,
+            sessioni: Default::default(),
+            riproduzione: None,
+            trascina_posizione: None,
             cruscotto: cruscotto::StatoCruscotto::carica(),
             impostazioni,
             #[cfg(feature = "collaudo")]
@@ -205,6 +239,28 @@ impl App {
 
     pub(crate) fn collegato(&self) -> bool {
         self.info.is_some()
+    }
+
+    /// Vero durante la riproduzione di una sessione registrata.
+    pub(crate) fn in_riproduzione(&self) -> bool {
+        self.info.as_ref().is_some_and(|i| i.in_riproduzione())
+    }
+
+    /// Vero se è collegato un adattatore (o il simulatore dal vivo).
+    pub(crate) fn collegato_dal_vivo(&self) -> bool {
+        self.info.as_ref().is_some_and(|i| !i.in_riproduzione())
+    }
+
+    /// Avvia la riproduzione della sessione (chiude quella in corso). Non va
+    /// chiamata con un adattatore collegato: il thread di lavoro la ignorerebbe.
+    pub(crate) fn avvia_riproduzione(&mut self, dati: SessionData) {
+        if self.in_riproduzione() {
+            self.invia(Comando::Scollega);
+        }
+        self.errore = None;
+        self.trascina_posizione = None;
+        self.invia(Comando::Collega(Sorgente::Riproduzione(Box::new(dati))));
+        self.scheda = Scheda::Cruscotto;
     }
 
     /// Vero se il collegamento è libero per un nuovo comando di lettura.
@@ -265,7 +321,19 @@ impl App {
                     self.errore = None;
                     self.gatt_sconosciuto = None;
                     self.extra = None;
+                    self.riproduzione = None;
+                    self.trascina_posizione = None;
+                    let riproduzione = info.in_riproduzione();
                     self.info = Some(*info);
+                    if riproduzione {
+                        // In riproduzione scorrono tutti i dati della sessione:
+                        // la pagina Sensori li mostra tutti.
+                        self.selezione = self
+                            .parametri_disponibili()
+                            .iter()
+                            .map(|p| (p.key.clone(), true))
+                            .collect();
+                    }
                 }
                 Evento::Diagnosi(d) => self.diagnosi = Some(*d),
                 Evento::CancellazioneDtc(r) => {
@@ -297,15 +365,30 @@ impl App {
                 }
                 Evento::Marcatore(m) => self.live.marcatori.push(m),
                 Evento::Scollegato { .. } => {
+                    if self.in_riproduzione() {
+                        // Chiusa la riproduzione, i suoi dati non restano a
+                        // confondersi con quelli di un collegamento futuro.
+                        self.live = Archivio::default();
+                        self.diagnosi = None;
+                    }
                     self.info = None;
                     self.conferma_cancellazione = None;
                     self.polling = false;
                     self.registrazione = None;
+                    self.riproduzione = None;
+                    self.trascina_posizione = None;
+                }
+                Evento::Riproduzione(s) => self.riproduzione = Some(s),
+                Evento::Salto { .. } => {
+                    // Nessuna linea attraversa il salto: i grafici ripartono.
+                    self.live = Archivio::default();
                 }
                 Evento::Errore(e) => {
                     if !matches!(
                         e,
-                        ErroreUtente::Registrazione(_) | ErroreUtente::CancellazioneNonEseguita(_)
+                        ErroreUtente::Registrazione(_)
+                            | ErroreUtente::CancellazioneNonEseguita(_)
+                            | ErroreUtente::Riproduzione(_)
                     ) {
                         self.scheda = Scheda::Connessione;
                     }
@@ -325,21 +408,25 @@ impl App {
             && let Ok(esito) = rx.try_recv()
         {
             self.caricamento = None;
+            let riproduci = std::mem::take(&mut self.sessioni.riproduci_dopo);
             match esito {
                 Ok(dati) => {
-                    let archivio = Archivio::da_sessione(&dati);
-                    let preset = PresetP0420::calcola(&archivio.pid_presenti());
-                    self.aperta = Some(SessioneAperta {
-                        dati,
-                        archivio,
-                        preset,
-                        extra: None,
-                        messaggio: None,
-                    });
+                    if riproduci && !self.collegato_dal_vivo() {
+                        self.avvia_riproduzione(dati.clone());
+                    }
+                    self.aperta = Some(SessioneAperta::new(dati, None));
                 }
-                Err(e) => self.errore_sessione = Some(e),
+                Err(e) => {
+                    if riproduci {
+                        self.errore = Some(ErroreUtente::Altro(format!(
+                            "Sessione non riproducibile: {e}"
+                        )));
+                    }
+                    self.errore_sessione = Some(e);
+                }
             }
         }
+        self.ricevi_importazione();
     }
 
     fn testo_stato(&self) -> (String, Color32) {
@@ -347,6 +434,14 @@ impl App {
             StatoConn::Scollegato => ("Non collegato".into(), GRIGIO),
             StatoConn::Scansione => ("Scansione Bluetooth in corso…".into(), GIALLO),
             StatoConn::Connessione(fase) => (fase.clone(), GIALLO),
+            StatoConn::Connesso if self.in_riproduzione() => {
+                let testo = match &self.riproduzione {
+                    Some(r) if r.finita => "Riproduzione finita",
+                    Some(r) if r.in_pausa => "Riproduzione in pausa",
+                    _ => "Riproduzione in corso",
+                };
+                (testo.into(), ARANCIO_DEMO)
+            }
             StatoConn::Connesso => ("Collegato".into(), VERDE),
             StatoConn::Diagnosi => ("Lettura della diagnosi in corso…".into(), GIALLO),
             StatoConn::Cancellazione => ("Cancellazione dei codici guasto in corso…".into(), ROSSO),
@@ -409,7 +504,41 @@ impl App {
             Scheda::Connessione => self.info.as_ref().is_some_and(|i| i.demo),
             Scheda::Impostazioni => false,
         };
-        if demo_in_vista {
+        if let Some(r) = self.info.as_ref().and_then(|i| i.riproduzione.clone()) {
+            // Per tutta la durata della riproduzione, su ogni pagina.
+            egui::Frame::new()
+                .fill(ARANCIO_DEMO)
+                .inner_margin(egui::Margin::symmetric(10, 5))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "RIPRODUZIONE — dati registrati il {}{}",
+                                data_leggibile(&r.registrata_il),
+                                if r.sessione_demo {
+                                    ", sessione demo"
+                                } else {
+                                    ""
+                                }
+                            ))
+                            .color(Color32::BLACK)
+                            .strong(),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "· non sono letture attuali · {}",
+                                r.importata
+                                    .clone()
+                                    .map(|i| format!("importata: {i}"))
+                                    .unwrap_or_else(|| r.file.clone())
+                            ))
+                            .color(Color32::BLACK),
+                        );
+                    });
+                });
+            self.barra_trasporto(ui);
+        } else if demo_in_vista {
             egui::Frame::new()
                 .fill(ARANCIO_DEMO)
                 .inner_margin(egui::Margin::symmetric(10, 5))
@@ -486,6 +615,7 @@ impl eframe::App for App {
         // Sopra a tutto, qualunque sia la scheda.
         let ctx = ui.ctx().clone();
         self.finestra_cancellazione(&ctx);
+        self.finestre_sessioni(&ctx);
     }
 }
 

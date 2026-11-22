@@ -27,8 +27,12 @@ Le chiavi dei sensori sono quelle del catalogo (`giri`, `velocita`,
 {"stato":"online","origine":"demo_sintetico","app":"OBDio","versione":"0.1.0"}
 ```
 
-- `origine` è `veicolo` per un adattatore reale e `demo_sintetico` per il
-  simulatore: i dati della demo non descrivono un veicolo.
+- `origine` è `veicolo` per un adattatore reale, `demo_sintetico` per il
+  simulatore (i dati della demo non descrivono un veicolo) e `riproduzione`
+  mentre si rivive una sessione registrata: sono dati del passato, mai
+  pubblicati come letture attuali. Lo stesso valore compare nell'istantanea e
+  negli eventi. Durante la riproduzione la diagnosi registrata non viene
+  pubblicata su `…/diagnosi`.
 - Il messaggio è `online` solo mentre c'è un collegamento attivo con
   l'adattatore (o con il simulatore). Senza collegamento, o a MQTT spento, è
   `{"stato":"offline"}`.

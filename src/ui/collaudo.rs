@@ -13,8 +13,10 @@ use super::cruscotto::modello::{Cella, Pagina, SPIA_MIL, Soglia, Strumento, Tipo
 use super::{App, Scheda, VistaSensori};
 use crate::elm::ConfermaCancellazione;
 use crate::obd::pids;
+use crate::recording;
+use crate::scambio::FormatoEsportazione;
 use crate::transport::demo::DemoTransport;
-use crate::worker::{Comando, Sorgente};
+use crate::worker::{Comando, ComandoRiproduzione, Sorgente};
 
 /// Fase iniziale del simulatore per il cruscotto: la velocità del ciclo demo
 /// è zero nei primi 45 s e sale a 69 km/h fra 45 e 48 s; partendo da 40 s il
@@ -359,7 +361,85 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             c.avanti();
         }
         44 if c.secondi() > 0.6 => scatta(&mut c, "9_impostazioni"),
+        // Esportazione della sessione demo registrata in CSV stile Torque.
         45 => {
+            app.scheda = Scheda::Sessioni;
+            let torque = c.cartella.join("sessione_demo_torque.csv");
+            app.esporta_sessione(FormatoEsportazione::CsvTorque, &torque);
+            if app
+                .sessioni
+                .esito
+                .as_ref()
+                .is_none_or(|e| e.cartella.is_none())
+            {
+                eprintln!("collaudo: esportazione Torque non riuscita");
+            }
+            c.avanti();
+        }
+        // Reimportazione dello stesso file: anteprima con il riepilogo.
+        46 if c.secondi() > 0.5 => {
+            app.importa_da(c.cartella.join("sessione_demo_torque.csv"));
+            c.avanti();
+        }
+        47 if app.sessioni.anteprima.is_some() && c.secondi() > 0.8 => {
+            scatta(&mut c, "16_importazione_anteprima")
+        }
+        48 => {
+            app.conferma_importazione();
+            c.avanti();
+        }
+        49 if c.secondi() > 1.0 => {
+            if app.aperta.as_ref().is_none_or(|s| s.riepilogo.is_none()) {
+                eprintln!("collaudo: la sessione importata non è stata aperta");
+            }
+            scatta(&mut c, "17_sessione_importata")
+        }
+        // Riproduzione della sessione demo con il cruscotto «Guida».
+        50 => {
+            match app.ultima.as_ref().map(|u| recording::carica(&u.percorso)) {
+                Some(Ok(dati)) => {
+                    app.cruscotto.pagina = 0;
+                    app.avvia_riproduzione(dati);
+                }
+                _ => eprintln!("collaudo: sessione registrata non riapribile"),
+            }
+            c.avanti();
+        }
+        // Verso la fine del minimo: poco dopo la velocità sale.
+        51 if app.riproduzione.is_some() && c.secondi() > 0.5 => {
+            app.invia(Comando::Riproduzione(ComandoRiproduzione::VaiA(40.0)));
+            app.invia(Comando::Riproduzione(ComandoRiproduzione::Velocita(2.0)));
+            c.avanti();
+        }
+        52 if c.secondi() > 2.6 => scatta(&mut c, "18_riproduzione_guida"),
+        // Salto al marcatore «2.500 giri» e pausa.
+        53 => {
+            let t = app.riproduzione.as_ref().and_then(|r| {
+                r.marcatori
+                    .iter()
+                    .find(|m| m.1 == "2.500 giri")
+                    .map(|m| m.0)
+            });
+            match t {
+                Some(t) => app.invia(Comando::Riproduzione(ComandoRiproduzione::VaiA(t))),
+                None => eprintln!("collaudo: marcatore «2.500 giri» assente"),
+            }
+            c.avanti();
+        }
+        54 if c.secondi() > 1.5 => {
+            app.invia(Comando::Riproduzione(ComandoRiproduzione::Pausa));
+            app.scheda = Scheda::Sensori;
+            app.vista = VistaSensori::PerSensore;
+            app.scorri_sensori = Some(0.0);
+            c.avanti();
+        }
+        55 if c.secondi() > 1.0 => scatta(&mut c, "19_riproduzione_sensori_in_pausa"),
+        56 => {
+            app.vista = VistaSensori::Confronto;
+            app.invia(Comando::Scollega);
+            c.avanti();
+        }
+        57 if !app.collegato() && c.secondi() > 0.5 => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             c.avanti();
         }

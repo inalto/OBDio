@@ -12,6 +12,7 @@ use super::modello::{
 };
 use super::sorgenti;
 use crate::obd::pids;
+use crate::ui::scelta_file::{EsitoScelta, SceltaFile, cartella_documenti};
 use crate::ui::{App, tema};
 
 /// Cosa fare con il file scelto nella finestra.
@@ -22,15 +23,10 @@ pub(crate) enum AzioneFile {
     Importa,
 }
 
-/// Finestra di importazione o esportazione: percorso scritto a mano, con
-/// l'elenco dei file JSON della cartella per sceglierne uno con un clic.
-///
-/// `egui-file-dialog` 0.14 (la versione per egui 0.35) dipende da `sysinfo`
-/// 0.39, che richiede Rust 1.95: con la versione di Rust del progetto (1.93)
-/// non compila, quindi qui si usa un campo di testo.
+/// Finestra di importazione o esportazione (vedi [`SceltaFile`]).
 pub(crate) struct DialogoFile {
     azione: AzioneFile,
-    percorso: String,
+    scelta: SceltaFile,
 }
 
 /// Nome di file sicuro a partire dal nome di una pagina.
@@ -369,12 +365,21 @@ impl App {
     }
 
     /// Parametri disponibili per l'ispettore: supportati prima, poi gli altri.
+    /// I parametri liberi (sessioni importate) compaiono solo se presenti
+    /// nella sorgente collegata o nei dati già ricevuti.
     fn candidati(&self) -> Vec<(&'static pids::Param, bool)> {
         let unione = self.info.as_ref().map(|i| &i.unione);
+        let vuoto = Default::default();
+        let liberi = self.info.as_ref().map_or(&vuoto, |i| &i.liberi);
         let mut v: Vec<(&'static pids::Param, bool)> = pids::catalogo()
             .iter()
+            .chain(
+                pids::liberi()
+                    .into_iter()
+                    .filter(|p| liberi.contains(&p.key) || self.live.serie.contains_key(&p.key)),
+            )
             .map(|p| {
-                let ok = match sorgenti::supportato(&p.key, unione) {
+                let ok = match sorgenti::supportato_con(&p.key, unione, liberi) {
                     Some(s) => s,
                     None => self.live.serie.contains_key(&p.key),
                 };
@@ -798,115 +803,43 @@ impl App {
             AzioneFile::EsportaTutto => "cruscotti_obdio.json".into(),
             AzioneFile::Importa => String::new(),
         };
-        let cartella = cartella_documenti();
-        self.cruscotto.dialogo = Some(DialogoFile {
-            azione,
-            percorso: cartella.join(nome).display().to_string(),
-        });
+        let (titolo, pulsante, spiegazione) = match azione {
+            AzioneFile::Importa => (
+                "Importa un cruscotto",
+                "Importa",
+                "Scrivi il percorso di un file JSON esportato da OBDio (una pagina o l'intero \
+                 insieme), oppure scegline uno dall'elenco. Le pagine importate si aggiungono a \
+                 quelle esistenti.",
+            ),
+            AzioneFile::EsportaPagina(_) => (
+                "Esporta questa pagina",
+                "Esporta",
+                "Scrivi dove salvare il file JSON. Se esiste già, viene sostituito.",
+            ),
+            AzioneFile::EsportaTutto => (
+                "Esporta tutti i cruscotti",
+                "Esporta",
+                "Scrivi dove salvare il file JSON. Se esiste già, viene sostituito.",
+            ),
+        };
+        let scelta = SceltaFile::new(titolo, pulsante, &cartella_documenti(), &nome)
+            .spiegazione(spiegazione)
+            .finali(&[".json"]);
+        self.cruscotto.dialogo = Some(DialogoFile { azione, scelta });
     }
 
     pub(crate) fn dialogo_file(&mut self, ctx: &egui::Context) {
         let Some(d) = &mut self.cruscotto.dialogo else {
             return;
         };
-        let (titolo, pulsante) = match d.azione {
-            AzioneFile::EsportaPagina(_) => ("Esporta questa pagina", "Esporta"),
-            AzioneFile::EsportaTutto => ("Esporta tutti i cruscotti", "Esporta"),
-            AzioneFile::Importa => ("Importa un cruscotto", "Importa"),
-        };
-        let mut esegui = false;
-        let mut chiudi = false;
-        let largo = (ctx.content_rect().width() - 2.0 * tema::SP_6).clamp(280.0, 620.0);
-        egui::Modal::new(egui::Id::new("cruscotto_file")).show(ctx, |ui| {
-            ui.set_width(largo);
-            ui.label(RichText::new(titolo).heading());
-            ui.label(
-                RichText::new(match d.azione {
-                    AzioneFile::Importa => {
-                        "Scrivi il percorso di un file JSON esportato da OBDio (una pagina o \
-                         l'intero insieme), oppure scegline uno dall'elenco. Le pagine \
-                         importate si aggiungono a quelle esistenti."
-                    }
-                    _ => "Scrivi dove salvare il file JSON. Se esiste già, viene sostituito.",
-                })
-                .color(tema::TESTO_2),
-            );
-            ui.add_space(tema::SP_2);
-            let r = ui.add(
-                egui::TextEdit::singleline(&mut d.percorso)
-                    .hint_text(r"C:\Users\…\Documents\cruscotto.json")
-                    .desired_width(ui.available_width()),
-            );
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                esegui = true;
+        match d.scelta.mostra(ctx, "cruscotto") {
+            EsitoScelta::Aperta => {}
+            EsitoScelta::Annulla => self.cruscotto.dialogo = None,
+            EsitoScelta::Conferma(percorso) => {
+                let azione = d.azione;
+                self.cruscotto.dialogo = None;
+                self.esegui_file(azione, &percorso);
             }
-            let cartella = {
-                let p = PathBuf::from(d.percorso.trim());
-                if p.is_dir() {
-                    p
-                } else {
-                    p.parent()
-                        .map(Path::to_path_buf)
-                        .filter(|c| c.is_dir())
-                        .unwrap_or_else(cartella_documenti)
-                }
-            };
-            let file = file_json(&cartella);
-            if !file.is_empty() {
-                ui.add_space(tema::SP_2);
-                ui.label(
-                    RichText::new(format!("File JSON in {}", cartella.display()))
-                        .small()
-                        .color(tema::TESTO_3),
-                );
-                ScrollArea::vertical()
-                    .id_salt("cruscotto_file_elenco")
-                    .max_height(160.0)
-                    .show(ui, |ui| {
-                        for f in &file {
-                            let nome = f
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default();
-                            let scelto = Path::new(d.percorso.trim()) == f.as_path();
-                            if ui.selectable_label(scelto, nome).clicked() {
-                                d.percorso = f.display().to_string();
-                            }
-                        }
-                    });
-            }
-            ui.add_space(tema::SP_3);
-            ui.horizontal(|ui| {
-                let pronto = !d.percorso.trim().is_empty();
-                if ui
-                    .add_enabled(
-                        pronto,
-                        egui::Button::new(
-                            RichText::new(pulsante)
-                                .color(tema::TESTO_SU_COLORE)
-                                .strong(),
-                        )
-                        .fill(tema::ACCENTO),
-                    )
-                    .clicked()
-                {
-                    esegui = true;
-                }
-                if ui.button("Annulla").clicked() {
-                    chiudi = true;
-                }
-            });
-        });
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            chiudi = true;
-        }
-        if esegui && !d.percorso.trim().is_empty() {
-            let azione = d.azione;
-            let percorso = PathBuf::from(d.percorso.trim());
-            self.cruscotto.dialogo = None;
-            self.esegui_file(azione, &percorso);
-        } else if chiudi {
-            self.cruscotto.dialogo = None;
         }
     }
 
@@ -961,32 +894,6 @@ impl App {
             (_, Ok(p)) => (format!("Esportato in «{}».", p.display()), tema::OK),
         });
     }
-}
-
-/// Cartella proposta per importare ed esportare: i Documenti dell'utente.
-fn cartella_documenti() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .map(|u| PathBuf::from(u).join("Documents"))
-        .filter(|d| d.is_dir())
-        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
-}
-
-/// File `.json` di una cartella, in ordine alfabetico (al massimo 50).
-fn file_json(cartella: &Path) -> Vec<PathBuf> {
-    let Ok(voci) = std::fs::read_dir(cartella) else {
-        return Vec::new();
-    };
-    let mut v: Vec<PathBuf> = voci
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| {
-            p.is_file()
-                && p.extension()
-                    .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("json"))
-        })
-        .collect();
-    v.sort();
-    v.truncate(50);
-    v
 }
 
 fn scrivi_json<T: serde::Serialize>(percorso: &Path, valore: &T) -> Result<PathBuf, String> {
