@@ -95,3 +95,24 @@ nel README, in [Stato delle verifiche](../README.md#stato-delle-verifiche).
 - Le circa 55 descrizioni curate a mano restano prioritarie; le altre sono una traduzione automatica fatta con un glossario di officina.
 - La traduzione non è stata rivista da un tecnico: la pagina Diagnosi mostra accanto il titolo inglese originale, che vale in caso di dubbio.
 - Dettagli in [FONTI_DATI.md](FONTI_DATI.md).
+
+## Aggiornamenti da GitHub
+
+- Scheda **Aggiornamenti** nelle Impostazioni: versione installata, ultimo
+  controllo con il suo esito, **Controlla ora** e l'interruttore del controllo
+  automatico (acceso, al più una volta ogni 24 ore, qualche secondo dopo
+  l'avvio). La scheda dice che cosa viene contattato (solo GitHub) e che
+  nulla su di te o sul veicolo viene inviato.
+- Una versione nuova compare come avviso nella barra di stato e come riquadro
+  con le note di rilascio, mai come finestra: **Scarica e installa**, **Apri
+  la pagina della versione**, **Ignora questa versione**, **Più tardi**.
+- Su Windows x64 l'installazione scarica l'eseguibile, ne verifica dimensione
+  e somma SHA-256 e lo mette al posto di quello in uso con ritorno indietro in
+  caso di errore; la versione precedente si elimina al prossimo avvio. Poi
+  **Riavvia ora** o **Al prossimo avvio**. Rifiutata durante una
+  registrazione o una cancellazione dei codici e dalle build di sviluppo.
+- La verifica non protegge da un account GitHub compromesso e l'eseguibile non
+  è firmato. Mai provato con un rilascio vero: vedi
+  [AGGIORNAMENTI.md](AGGIORNAMENTI.md), che descrive anche i nomi dei file che
+  un rilascio deve avere.
+- Su Android il controllo non esiste: l'app si aggiorna con il pacchetto.

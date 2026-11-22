@@ -91,7 +91,7 @@ enum Gesto {
 
 /// Interruttore a levetta con l'etichetta accanto. Restituisce la risposta
 /// dell'intero controllo (levetta ed etichetta sono un solo bersaglio).
-fn interruttore(ui: &mut egui::Ui, acceso: bool, etichetta: &str) -> egui::Response {
+pub(super) fn interruttore(ui: &mut egui::Ui, acceso: bool, etichetta: &str) -> egui::Response {
     let alto = ui.spacing().interact_size.y;
     let pista = vec2(48.0, 26.0f32.min(alto));
     let colore_testo = if acceso { tema::TESTO } else { tema::TESTO_2 };

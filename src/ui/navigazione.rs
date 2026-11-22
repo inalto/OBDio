@@ -265,6 +265,8 @@ impl App {
                 .color(tema::TESTO),
         );
         let mut apri_impostazioni = false;
+        #[cfg(not(target_os = "android"))]
+        let mut apri_aggiornamenti = false;
         riga.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = tema::SP_1;
             let (lungo, breve, colore) = self.stato_collegamento();
@@ -315,9 +317,34 @@ impl App {
                 }
                 icone::pallino(ui, colore);
             }
+            // Versione nuova: un avviso discreto, mai una finestra. Un clic
+            // porta alla scheda Aggiornamenti.
+            #[cfg(not(target_os = "android"))]
+            if let Some((largo, breve, colore)) = self.aggiornamenti.testo_barra()
+                && (!stretto || ui.available_width() > 100.0)
+            {
+                ui.add_space(tema::SP_3);
+                let testo = if stretto { breve } else { largo };
+                let etichetta = egui::Label::new(RichText::new(testo).color(tema::TESTO_2))
+                    .sense(Sense::click());
+                if ui
+                    .add(etichetta)
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("Aggiornamento di OBDio: apri la scheda nelle Impostazioni")
+                    .clicked()
+                {
+                    apri_aggiornamenti = true;
+                }
+                icone::pallino(ui, colore);
+            }
         });
         if apri_impostazioni {
             self.scheda = Scheda::Impostazioni;
+        }
+        #[cfg(not(target_os = "android"))]
+        if apri_aggiornamenti {
+            self.scheda = Scheda::Impostazioni;
+            self.aggiornamenti.scorri_alla_scheda = true;
         }
         self.fasce(ui);
     }
@@ -535,7 +562,14 @@ impl App {
                 self.chiedi_chiusura = false;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            Some(_) => self.chiedi_chiusura = false,
+            Some(_) => {
+                self.chiedi_chiusura = false;
+                // Chiusura annullata: niente riavvio dopo un aggiornamento.
+                #[cfg(not(target_os = "android"))]
+                {
+                    self.aggiornamenti.riavvio_richiesto = false;
+                }
+            }
             None => {}
         }
     }

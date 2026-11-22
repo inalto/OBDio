@@ -11,9 +11,13 @@
 //! - [`riproduzione`]: riproduzione in tempo reale di una sessione registrata;
 //! - [`mqtt`]: pubblicazione in tempo reale su un broker MQTT;
 //! - [`mcp`]: server MCP locale per assistenti AI (spento finché non lo si attiva);
+//! - `aggiornamenti`: controllo e installazione delle versioni nuove da GitHub
+//!   (solo desktop, in un thread a parte);
 //! - [`worker`]: thread di lavoro con stati espliciti;
 //! - [`ui`]: interfaccia egui.
 
+#[cfg(not(target_os = "android"))]
+pub mod aggiornamenti;
 pub mod config;
 pub mod diagnosis;
 pub mod elm;

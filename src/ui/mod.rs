@@ -28,6 +28,8 @@ pub mod dati;
 mod grafici;
 mod icone;
 mod impostazioni;
+#[cfg(not(target_os = "android"))]
+mod impostazioni_aggiornamenti;
 mod impostazioni_mcp;
 mod navigazione;
 mod pagine;
@@ -169,6 +171,9 @@ pub struct App {
     pub(crate) impostazioni: impostazioni::Impostazioni,
     // Impostazioni (server MCP per assistenti AI)
     pub(crate) mcp: impostazioni_mcp::StatoMcpUi,
+    // Impostazioni (aggiornamenti da GitHub; non su Android)
+    #[cfg(not(target_os = "android"))]
+    pub(crate) aggiornamenti: impostazioni_aggiornamenti::StatoAggiornamentiUi,
 
     #[cfg(feature = "collaudo")]
     collaudo: Option<collaudo::Collaudo>,
@@ -257,6 +262,8 @@ impl App {
             cruscotto: cruscotto::StatoCruscotto::carica(),
             impostazioni,
             mcp,
+            #[cfg(not(target_os = "android"))]
+            aggiornamenti: impostazioni_aggiornamenti::StatoAggiornamentiUi::carica(&cc.egui_ctx),
             #[cfg(feature = "collaudo")]
             collaudo: collaudo::Collaudo::da_ambiente(),
         }
@@ -483,8 +490,11 @@ impl eframe::App for App {
     /// Chiamata anche a finestra ridotta a icona: gli eventi vengono smaltiti
     /// comunque. La registrazione, in ogni caso, vive nel thread di lavoro.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let _ = ctx;
         self.ricevi();
+        #[cfg(not(target_os = "android"))]
+        self.passo_aggiornamenti(ctx);
+        #[cfg(target_os = "android")]
+        let _ = ctx;
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -569,5 +579,9 @@ impl Drop for App {
         if let Some(h) = self.lavoro.take() {
             let _ = h.join();
         }
+        // «Riavvia ora» dopo un aggiornamento: la versione nuova parte solo
+        // ora che registrazione, collegamenti e server sono chiusi.
+        #[cfg(not(target_os = "android"))]
+        self.aggiornamenti.riavvia_se_richiesto();
     }
 }

@@ -1,5 +1,7 @@
-//! Pagina Impostazioni: server MCP, pubblicazione MQTT, cartelle, informazioni.
-//! La scheda del server MCP è in `impostazioni_mcp`.
+//! Pagina Impostazioni: server MCP, pubblicazione MQTT, cartelle,
+//! aggiornamenti, informazioni. La scheda del server MCP è in
+//! `impostazioni_mcp`, quella degli aggiornamenti in
+//! `impostazioni_aggiornamenti`.
 
 use eframe::egui::{self, Color32, RichText, ScrollArea};
 
@@ -108,12 +110,30 @@ impl App {
     pub(super) fn pagina_impostazioni(&mut self, ui: &mut egui::Ui) {
         let stretto = self.disposizione.stretta();
         let mut area = ScrollArea::vertical().auto_shrink(false);
+        #[cfg(not(target_os = "android"))]
+        let alla_scheda_aggiornamenti = {
+            let a = &mut self.aggiornamenti;
+            let pronta = a.y_scheda > 0.0;
+            if a.fissa_al_riquadro && a.y_riquadro > 0.0 {
+                Some((a.y_riquadro - tema::SP_3).max(0.0))
+            } else if a.fissa_alla_scheda || (a.scorri_alla_scheda && pronta) {
+                a.scorri_alla_scheda = false;
+                Some(a.y_scheda)
+            } else {
+                None
+            }
+        };
+        #[cfg(target_os = "android")]
+        let alla_scheda_aggiornamenti: Option<f32> = None;
         if self.mcp.oltre_la_scheda {
             area = area.vertical_scroll_offset(self.mcp.altezza + tema::SP_3);
+        } else if let Some(y) = alla_scheda_aggiornamenti {
+            area = area.vertical_scroll_offset(y);
         } else if let Some(y) = self.mcp.scorri.take() {
             area = area.vertical_scroll_offset(y);
         }
         area.show(ui, |ui| {
+            let origine = ui.cursor().top();
             if !stretto {
                 ui.set_max_width(800.0);
             }
@@ -159,7 +179,7 @@ impl App {
                 let cartelle = [
                     ("Sessioni registrate e importate", self.cartella.clone()),
                     (
-                        "Configurazione (cruscotti, MQTT, MCP)",
+                        "Configurazione (cruscotti, MQTT, MCP, aggiornamenti)",
                         config::cartella_configurazione(),
                     ),
                 ];
@@ -174,6 +194,15 @@ impl App {
                     }
                 }
             });
+            #[cfg(not(target_os = "android"))]
+            self.scheda_aggiornamenti(ui, stretto, origine);
+            #[cfg(target_os = "android")]
+            {
+                let _ = origine;
+                scheda_titolata(ui, "Aggiornamenti", |ui| {
+                    nota(ui, crate::piattaforma::NOTA_AGGIORNAMENTI_ASSENTI)
+                });
+            }
             scheda_titolata(ui, "Informazioni", |ui| {
                 riga_valore(
                     ui,

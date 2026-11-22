@@ -75,7 +75,7 @@ Sei destinazioni, sempre le stesse:
 | **Cruscotto** | Pagine di strumenti personalizzabili |
 | **Sensori** | Elenco di tutti i parametri supportati, valori dal vivo, un grafico per sensore |
 | **Sessioni** | Registrazioni salvate, importazione, esportazione |
-| **Impostazioni** | Server MCP per assistenti AI, MQTT, unità, cartelle, informazioni |
+| **Impostazioni** | Server MCP per assistenti AI, MQTT, unità, cartelle, aggiornamenti, informazioni |
 
 Layout adattivo in base alla larghezza disponibile:
 
@@ -146,6 +146,23 @@ a larghezza fissa su `sfondo`; il token è mascherato finché non si preme
 *Mostra*. Nella barra di stato «MCP» compare solo a server acceso (o non
 avviato per un errore) e porta alle Impostazioni: non è un interruttore, per
 non aprire o chiudere una porta con un clic distratto.
+
+Nota di implementazione (aggiornamenti): la scheda *Aggiornamenti* sta fra
+*Cartelle* e *Informazioni* (`src/ui/impostazioni_aggiornamenti.rs`) e riusa
+l'interruttore a levetta del server MCP per il controllo automatico, con
+sotto la nota su che cosa viene contattato. Una versione nuova non apre mai
+una finestra: compare nella barra di stato come «Aggiornamento 0.4.0» (sullo
+stretto «v0.4.0», solo se avanza posto) con un pallino `accento`, e un clic
+porta alla scheda; dentro la scheda un riquadro su `sfondo` con bordo
+`accento` velato mostra versioni, data, note di rilascio scorrevoli in testo
+semplice (i collegamenti non sono attivi) e i pulsanti, *Scarica e
+installa* come azione primaria. Il motivo per cui l'installazione non si può
+fare (registrazione in corso, build di sviluppo, piattaforma) sta in
+`attenzione` sotto i pulsanti, che restano visibili ma disattivati. Sullo
+stretto i pulsanti sono impilati a tutta larghezza. Dopo l'installazione il
+riquadro diventa *Versione … installata* in `ok` con *Riavvia ora* /
+*Al prossimo avvio*: nessuna conferma in più, perché il riavvio passa dalla
+chiusura normale (che chiede ancora del cruscotto non salvato).
 
 ## 3. Strumenti del cruscotto
 

@@ -1,8 +1,11 @@
 # OBDio
 
 Lettore diagnostico OBD-II/EOBD per Windows 11 x64, pensato per adattatori
-ELM327 Bluetooth come il Carista. Funziona solo in locale: nessun account,
-nessun abbonamento, nessun servizio cloud.
+ELM327 Bluetooth come il Carista. Funziona in locale: nessun account,
+nessun abbonamento, nessun servizio cloud. Gli unici collegamenti in rete
+sono il controllo degli aggiornamenti su GitHub, che si può spegnere e non
+invia nulla su di te o sul veicolo (vedi [Aggiornamenti](#aggiornamenti)), e
+MQTT e il server MCP, solo se li attivi tu.
 
 **L'app lavora in lettura, con una sola eccezione.** Legge codici guasto,
 fermo immagine, monitor e dati in tempo reale. L'unica azione che modifica la
@@ -32,7 +35,7 @@ in [docs/NOVITA.md](docs/NOVITA.md).
 - [Importare ed esportare le sessioni](#importare-ed-esportare-le-sessioni)
 - [Rivivere una sessione (riproduzione)](#rivivere-una-sessione-riproduzione)
 - [Cosa mostra la diagnosi](#cosa-mostra-la-diagnosi), [Cancellare i codici guasto](#cancellare-i-codici-guasto)
-- [MQTT](#mqtt), [Server MCP per assistenti AI](#server-mcp-per-assistenti-ai), [Android](#android)
+- [MQTT](#mqtt), [Server MCP per assistenti AI](#server-mcp-per-assistenti-ai), [Aggiornamenti](#aggiornamenti), [Android](#android)
 - [Stato delle verifiche](#stato-delle-verifiche), [Controlli da fare sull'auto](#controlli-da-fare-sullauto)
 - [Limiti noti](#limiti-noti), [Comandi inviati](#comandi-inviati), [Compilare dai sorgenti](#compilare-dai-sorgenti)
 
@@ -558,6 +561,40 @@ Strumenti, esempi, modello di sicurezza con i suoi limiti e problemi comuni:
 > con `curl` e con `fetch` di Node.js. **Nessun assistente AI reale è stato
 > collegato.**
 
+## Aggiornamenti
+
+![Scheda Aggiornamenti con una versione nuova](docs/schermate/aggiornamenti.png)
+
+OBDio controlla su GitHub se c'è una versione nuova: in automatico al più una
+volta al giorno, qualche secondo dopo l'avvio, oppure con **Controlla ora**
+nella scheda *Aggiornamenti* delle Impostazioni, dove c'è anche l'interruttore
+per spegnere il controllo automatico.
+
+- Contatta solo GitHub (`api.github.com`; per scaricare `github.com` e
+  `*.githubusercontent.com`), in HTTPS, senza account né cookie, e non invia
+  nulla su di te, sul veicolo o sulle sessioni.
+- Una versione nuova compare come avviso nella barra di stato e come riquadro
+  con le note di rilascio: nessuna finestra si apre da sola.
+- Su Windows x64 **Scarica e installa** scarica l'eseguibile, ne controlla
+  dimensione e somma SHA-256 e lo mette al posto di quello in uso, che resta
+  come `OBDio.vecchio.exe` fino al prossimo avvio. *Riavvia ora* o *Al
+  prossimo avvio*. Sessioni e configurazione non vengono toccate.
+- La verifica scopre un file danneggiato o alterato durante lo scaricamento,
+  **non** un account o un repository GitHub compromessi. L'eseguibile non è
+  firmato: SmartScreen può avvisare.
+- Su Android l'app si aggiorna con il pacchetto: il controllo non esiste.
+
+Come funziona, sicurezza e limiti, aggiornamento a mano, problemi comuni e i
+nomi dei file che un rilascio deve avere:
+[docs/AGGIORNAMENTI.md](docs/AGGIORNAMENTI.md).
+
+> **Verifica.** Provato con test automatici contro un server HTTP di prova
+> (scaricamento, verifica e sostituzione di un finto eseguibile) e con una
+> richiesta vera a GitHub prima che il repository esistesse (risposta 404).
+> La sostituzione è provata anche su un eseguibile in esecuzione (non OBDio).
+> **Mai provati** un rilascio vero, OBDio che sostituisce sé stesso e
+> riparte, e SmartScreen.
+
 ## Stato delle verifiche
 
 ### Adattatori Carista: cosa è documentato
@@ -594,7 +631,7 @@ non è verificabile: è un'ipotesi, non un dato.
 
 | Verifica | Esito |
 |---|---|
-| Test automatici (240: 213 unitari e 27 di integrazione in `tests/`): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
+| Test automatici (290: 252 unitari e 38 di integrazione in `tests/`, di cui 39 e 11 per gli aggiornamenti): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
 | Flusso demo attraverso il thread di lavoro reale: collegamento, P0420, fermo immagine, polling con priorità alle sonde, registrazione, CSV, riapertura | Superato |
 | Distanza parziale attraverso il thread di lavoro reale: campioni monotoni in km, registrati nella sessione e nel CSV | Superato |
 | Cancellazione dei codici in demo attraverso il thread di lavoro reale: copia della diagnosi, servizio 04, rilettura con P0420 solo permanente, MIL spenta, prontezza azzerata | Superato |
@@ -608,6 +645,12 @@ non è verificabile: è un'ipotesi, non un dato.
 | Scheda del server MCP nell'interfaccia | Schermate dal collaudo automatico, larghe e strette, con valori d'esempio (server non avviato dal collaudo); interruttore, «Copia», «Rigenera» e cambio di porta premuti a mano **non provati** |
 | Interfaccia in demo, con schermate di **ogni pagina a 1280 × 820 e a 390 × 844** (layout da telefono): connessione, diagnosi, fermo immagine, grafici con buco del dato e marcatori, pagina Sensori (elenco, confronto, un grafico per sensore con diciassette sensori), sessioni (elenco e dettaglio), impostazioni, finestra di scelta del file, conferma ed esito della cancellazione, chiusura con il cruscotto non salvato | Superato |
 | Cruscotto in demo, con schermate larghe e strette: «Guida» in movimento, «Diagnosi P0420» con l'interruzione della sonda a valle, modo Modifica con ispettore, una pagina con i sette tipi (parametro non supportato, risposta mancante), lettura avviata e fermata dal cruscotto | Superato; trascinamenti e ridimensionamenti col mouse **non provati** dal collaudo automatico |
+| Aggiornamenti con un server HTTP di prova nello stesso processo (dieci dei suoi undici test di integrazione): ultimo rilascio, rinvio seguito, scaricamento con avanzamento, verifica di dimensione e SHA-256, sostituzione di un finto `OBDio.exe` in una cartella temporanea e pulizia di `OBDio.vecchio.exe`; binario alterato, dimensione diversa, somme mancanti, annullamento a metà (nessun file parziale), rinvio verso un host estraneo, giro di rinvii, limite di richieste `403`/`429`, `404`, risposta rotta, troppo grande o non UTF-8, tempo scaduto, versione non più nuova, cartella non scrivibile; il thread degli aggiornamenti | Superato |
+| Sostituzione dell'eseguibile con un guasto simulato a ogni passo (rimozione del residuo, prima e seconda rinomina, ritorno indietro con rinomina e con copia, ritorno indietro impossibile) | Superato: con il nome `OBDio.exe` resta sempre la versione in uso, o l'errore dice dove sta |
+| Controllo vero contro `api.github.com` (`cargo run --example controlla_aggiornamenti`), una volta, prima che il repository esistesse | Risposta 404, «nessuna versione pubblicata», attraverso HTTPS con SChannel |
+| Sostituzione di un eseguibile davvero in esecuzione su Windows 11 (una copia di `ping.exe` aperta durante la prova): rinomina riuscita, sovrascrittura diretta impossibile, pulizia di `OBDio.vecchio.exe` rimandata finché il processo vive e riuscita dopo | Superato (undicesimo test di integrazione) |
+| Rilascio vero su GitHub, rinvii reali verso `githubusercontent.com`, sostituzione di un `OBDio.exe` che sostituisce sé stesso, «Riavvia ora», SmartScreen e antivirus, cartella in sola lettura vera (`Program Files`) | **Non provati**: il repository non ha ancora rilasci; la cartella non scrivibile è provata con una cartella inesistente |
+| Scheda Aggiornamenti nell'interfaccia | Schermate dal collaudo automatico, larghe e strette, con un rilascio d'esempio (nessuna richiesta in rete) e con l'avanzamento dello scaricamento; pulsanti premuti a mano **non provati** |
 | Uso col dito su un telefono vero, tastiera Ctrl+1…6 premuta a mano | **Non provati**: il layout stretto è verificato solo restringendo la finestra su Windows |
 | Nuovi PID (contachilometri, pedale, coppia, consumo, pressioni…) su un veicolo reale | **Non provati**: formule da Wikipedia, verificate solo con test sui valori; quelle dei PID 49, 4A e 4C sono dedotte |
 | Riproduzione attraverso il thread di lavoro reale: sessione demo registrata, riaperta e rivissuta a 10× con gli stessi campioni (letture fallite comprese) e marcatori; pausa, salto avanti e indietro, ripetizione; registrazione, marcatori, lettura e cancellazione della diagnosi rifiutati; MQTT con origine «riproduzione»; sessione Torque importata con parametri liberi | Superato |
@@ -704,7 +747,11 @@ cargo build --release
 
 Dipendenze principali: `eframe`/`egui` 0.35 e `egui_plot` 0.36 (interfaccia e
 grafici; sono le ultime versioni compatibili con Rust 1.93), `btleplug` 0.13
-(Bluetooth LE tramite le API WinRT), `serialport` 4 (porte COM).
+(Bluetooth LE tramite le API WinRT), `serialport` 4 (porte COM), `ureq` 3 con
+`native-tls` (HTTPS per gli aggiornamenti con il TLS del sistema, SChannel su
+Windows: nessun codice crittografico in C da compilare) e `sha2` 0.11 (SHA-256
+in Rust puro). Su Linux `native-tls` usa OpenSSL: servono le sue librerie di
+sviluppo.
 
 Struttura:
 
@@ -717,6 +764,7 @@ Struttura:
 | `recording.rs` | Sessioni su disco e CSV |
 | `mqtt.rs` | Pubblicazione MQTT: argomenti, limitazione di frequenza, coda non bloccante, discovery |
 | `mcp/` | Server MCP locale per assistenti AI: archivio condiviso, strumenti, protocollo, trasporto HTTP |
+| `aggiornamenti/` | Controllo e installazione delle versioni nuove da GitHub (solo desktop): versioni, rilascio, somme SHA-256, pianificazione, HTTPS con host ammessi, sostituzione dell'eseguibile |
 | `worker.rs` | Thread di lavoro con stati espliciti: scansione, connessione, diagnosi, cancellazione, polling, registrazione, disconnessione |
 | `ui/` | Interfaccia egui: non esegue mai I/O verso l'adattatore |
 | `ui/tema.rs` | Token visivi (colori, spaziature, raggi, caratteri) applicati a egui |
@@ -726,6 +774,10 @@ Strumenti di sviluppo:
 
 - `cargo run --example scansione_ble` elenca porte COM e dispositivi BLE
   senza collegarsi a nulla;
+- `cargo run --example controlla_aggiornamenti` fa il controllo vero degli
+  aggiornamenti contro GitHub (una richiesta, nessuno scaricamento) e stampa
+  che cosa vede l'app;
 - `cargo build --features collaudo`, poi avvio con la variabile d'ambiente
   `OBDIO_COLLAUDO=<cartella>`: l'app percorre da sola il flusso demo e salva
-  una schermata per ogni passo.
+  una schermata per ogni passo. Con questa funzione il controllo automatico
+  degli aggiornamenti è disattivato: il collaudo non contatta la rete.

@@ -12,8 +12,10 @@ use std::time::Instant;
 use eframe::egui;
 
 use super::cruscotto::modello::{Cella, Pagina, SPIA_MIL, Soglia, Strumento, TipoStrumento};
+use super::impostazioni_aggiornamenti::InCorso;
 use super::sessioni::AzioneSessioni;
 use super::{App, PannelloSensori, Scheda, VistaSensori};
+use crate::aggiornamenti::{Rilascio, Valutazione, Versione, rete};
 use crate::elm::ConfermaCancellazione;
 use crate::mcp::{Livello, McpConfig, StatoMcp, StatoMcpInfo};
 use crate::obd::pids;
@@ -92,6 +94,61 @@ fn esempio_mcp(app: &mut App) {
         ultimo_client: Some("claude-code 2.1.0".into()),
         ultimo_errore: None,
     };
+}
+
+/// Scheda Aggiornamenti come appare quando GitHub offre una versione nuova:
+/// rilascio d'esempio (la minore successiva a quella in uso), nessuna
+/// richiesta in rete, nulla salvato su disco.
+fn esempio_aggiornamento(app: &mut App) {
+    let v = Versione::corrente();
+    let nuova = format!("{}.{}.0", v.maggiore, v.minore + 1);
+    let note = serde_json::to_string(
+        "Novità\r\n\r\n\
+         - Controllo degli aggiornamenti da GitHub, con interruttore nelle Impostazioni.\r\n\
+         - Installazione con un clic su Windows, con verifica della somma SHA-256.\r\n\
+         - Descrizioni italiane per altri codici guasto generici.\r\n\r\n\
+         Correzioni\r\n\r\n\
+         - Il cruscotto ricorda la pagina aperta.\r\n\
+         - La riproduzione riparte dal marcatore scelto anche in pausa.\r\n\r\n\
+         Dettagli: https://github.com/inalto/OBDio/blob/main/docs/NOVITA.md",
+    )
+    .unwrap_or_default();
+    let json = format!(
+        r#"{{
+  "tag_name": "v{nuova}",
+  "name": "OBDio {nuova}",
+  "html_url": "https://github.com/inalto/OBDio/releases/tag/v{nuova}",
+  "draft": false,
+  "prerelease": false,
+  "published_at": "2026-12-01T10:00:00Z",
+  "body": {note},
+  "assets": [
+    {{"name": "OBDio-{nuova}-windows-x64.zip", "size": 5242880, "state": "uploaded",
+      "browser_download_url": "https://github.com/inalto/OBDio/releases/download/v{nuova}/OBDio-{nuova}-windows-x64.zip"}},
+    {{"name": "OBDio-{nuova}-windows-x64.exe", "size": 12582912, "state": "uploaded",
+      "browser_download_url": "https://github.com/inalto/OBDio/releases/download/v{nuova}/OBDio-{nuova}-windows-x64.exe"}},
+    {{"name": "SHA256SUMS.txt", "size": 190, "state": "uploaded",
+      "browser_download_url": "https://github.com/inalto/OBDio/releases/download/v{nuova}/SHA256SUMS.txt"}}
+  ]
+}}"#
+    );
+    let r = match Rilascio::da_json(&json) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("collaudo: rilascio d'esempio non valido: {e}");
+            return;
+        }
+    };
+    let a = &mut app.aggiornamenti;
+    a.config.ultimo_controllo = Some(rete::adesso() - 180);
+    a.config.ultimo_esito = Some(format!("disponibile la versione {nuova}"));
+    a.rilascio = Some(Box::new(r));
+    a.valutazione = Some(Valutazione::Disponibile);
+    a.piu_tardi = false;
+    a.installato = None;
+    a.messaggio = None;
+    a.come_installata = true;
+    a.fissa_alla_scheda = true;
 }
 
 fn sonda_a_valle_muta(app: &App) -> bool {
@@ -594,7 +651,50 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
                 Azione::Attendi(1.0),
             ]);
         }
+        // Scheda Aggiornamenti con una versione nuova d'esempio: nessuna
+        // richiesta in rete, nulla salvato.
         65 => {
+            esempio_aggiornamento(app);
+            app.scheda = Scheda::Impostazioni;
+            c.avanti();
+        }
+        66 if c.secondi() > 0.8 => c.scatta("largo_aggiornamenti"),
+        // Sullo stretto la scheda è più alta dello schermo: l'inizio, poi il
+        // riquadro della versione con i pulsanti.
+        67 => c.coda.extend([
+            Azione::Misura(STRETTO),
+            Azione::Attendi(1.2),
+            Azione::Scatta("stretto_aggiornamenti_scheda".into()),
+        ]),
+        68 => {
+            app.aggiornamenti.fissa_al_riquadro = true;
+            c.coda.extend([
+                Azione::Attendi(0.8),
+                Azione::Scatta("stretto_aggiornamenti".into()),
+            ]);
+        }
+        69 => {
+            app.aggiornamenti.in_corso = Some(InCorso::Scaricamento {
+                scaricati: 5_400_000,
+                totale: 12_582_912,
+            });
+            c.coda.extend([
+                Azione::Attendi(0.6),
+                Azione::Scatta("stretto_aggiornamenti_scaricamento".into()),
+                Azione::Misura(LARGO),
+                Azione::Attendi(1.0),
+            ]);
+        }
+        70 => {
+            app.aggiornamenti.fissa_al_riquadro = false;
+            c.coda.extend([
+                Azione::Attendi(0.6),
+                Azione::Scatta("largo_aggiornamenti_scaricamento".into()),
+            ]);
+        }
+        71 => {
+            app.aggiornamenti.in_corso = None;
+            app.aggiornamenti.fissa_alla_scheda = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             c.avanti();
         }
