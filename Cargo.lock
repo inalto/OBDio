@@ -222,8 +222,6 @@ dependencies = [
 [[package]]
 name = "btleplug"
 version = "0.13.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d836502de731602ea87cbb307065e8feaed4fd10f0855a75b0b87944ee011dc"
 dependencies = [
  "async-trait",
  "bitflags 2.13.2",
@@ -1755,7 +1753,7 @@ dependencies = [
 
 [[package]]
 name = "obdio"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "android-activity",
  "android_logger",

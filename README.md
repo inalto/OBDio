@@ -18,7 +18,7 @@ permette di inviare comandi liberi.
 [rilasci su GitHub](https://github.com/inalto/OBDio/releases/latest)
 (file `OBDio-<versione>-windows-x64.zip`). Licenza: [MIT](LICENSE).
 
-Versione 1.0.0. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
+Versione 1.0.1. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
 con codice P0420. Le novità rispetto alla prima versione, fase per fase, sono
 in [docs/NOVITA.md](docs/NOVITA.md).
 
@@ -42,6 +42,7 @@ in [docs/NOVITA.md](docs/NOVITA.md).
 - [MQTT](#mqtt), [Server MCP per assistenti AI](#server-mcp-per-assistenti-ai), [Aggiornamenti](#aggiornamenti), [Android](#android)
 - [Stato delle verifiche](#stato-delle-verifiche), [Controlli da fare sull'auto](#controlli-da-fare-sullauto)
 - [Limiti noti](#limiti-noti), [Comandi inviati](#comandi-inviati), [Compilare dai sorgenti](#compilare-dai-sorgenti)
+- Se qualcosa non va: [docs/DIAGNOSI_PROBLEMI.md](docs/DIAGNOSI_PROBLEMI.md) (registri, diagnosi Bluetooth, errori frequenti)
 
 ## Avvio
 
@@ -122,8 +123,9 @@ già connesso al telefono non è raggiungibile dal PC.
 
 ### Bluetooth Low Energy (prima scelta)
 
-1. Scheda **Connessione** → **Cerca dispositivi**. Non serve associare
-   l'adattatore in Windows.
+1. Scheda **Connessione** → **Cerca dispositivi**. Di norma non serve
+   associare l'adattatore in Windows; se però l'app dice che l'adattatore
+   rifiuta l'accesso Bluetooth, associalo e riprova (o usa la porta seriale).
 2. Seleziona l'adattatore nell'elenco (i probabili adattatori OBD sono
    marcati `[OBD]` e stanno in cima) → **Collega il dispositivo selezionato**.
 3. L'app scopre i servizi GATT e apre il canale dati **solo** se corrispondono
@@ -152,10 +154,22 @@ Per gli adattatori che Windows associa come dispositivo Bluetooth classico:
 | L'adattatore non risponde ai comandi | Il canale è aperto ma il dispositivo non risponde come un ELM327. |
 | La centralina non risponde | L'adattatore funziona, ma nessuna centralina risponde: quadro spento o protocollo non trovato. |
 | Collegamento interrotto | Il collegamento è caduto. Il polling si ferma; la registrazione in corso viene chiusa e conservata. |
+| L'adattatore rifiuta l'accesso Bluetooth | Il dispositivo risponde ma nega i servizi GATT (accesso negato o errore di protocollo): di solito vuole l'associazione in Windows. In alternativa, porta seriale (COM). |
+| Errore interno | Un errore nel programma durante l'operazione indicata: il collegamento è chiuso, l'app resta aperta e si può riprovare. Dettagli nel registro degli errori. |
+
+Gli errori di collegamento Bluetooth dicono anche **quale passo** non è
+riuscito (connessione radio, scoperta dei servizi GATT, flusso o attivazione
+delle notifiche); la connessione radio viene ritentata una volta da sola dopo
+un errore transitorio.
 
 Il **Registro degli scambi con l'adattatore**, in fondo alla scheda
-Connessione, mostra comandi e risposte ed è copiabile. La risposta al VIN non
-viene mai registrata.
+Connessione, mostra comandi e risposte e i passi del collegamento Bluetooth
+(righe `BLE`), ed è copiabile. La risposta al VIN non viene mai registrata.
+
+Se l'app si chiude da sola o non si collega, i file da inviare (registro degli
+errori e registro dei collegamenti) e la diagnosi Bluetooth da terminale
+(`OBDio.exe --diagnosi-ble`) sono spiegati in
+[docs/DIAGNOSI_PROBLEMI.md](docs/DIAGNOSI_PROBLEMI.md).
 
 ## Pagina Sensori
 
@@ -635,7 +649,7 @@ non è verificabile: è un'ipotesi, non un dato.
 
 | Verifica | Esito |
 |---|---|
-| Test automatici (290: 252 unitari e 38 di integrazione in `tests/`, di cui 39 e 11 per gli aggiornamenti): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
+| Test automatici (305: 261 unitari e 44 di integrazione in `tests/`, di cui 39 e 11 per gli aggiornamenti; più le prove di btleplug incluso, `cargo test --manifest-path vendor/btleplug/Cargo.toml --lib`): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
 | Flusso demo attraverso il thread di lavoro reale: collegamento, P0420, fermo immagine, polling con priorità alle sonde, registrazione, CSV, riapertura | Superato |
 | Distanza parziale attraverso il thread di lavoro reale: campioni monotoni in km, registrati nella sessione e nel CSV | Superato |
 | Cancellazione dei codici in demo attraverso il thread di lavoro reale: copia della diagnosi, servizio 04, rilettura con P0420 solo permanente, MIL spenta, prontezza azzerata | Superato |
@@ -662,8 +676,11 @@ non è verificabile: è un'ipotesi, non un dato.
 | Importazione ed esportazione: andata e ritorno esatti del CSV OBDio, CSV in stile Torque scritto e riletto, conversioni °F/mph/psi, file troncati, colonne in più o in meno, byte non UTF-8, BOM, CR LF e LF, CSV di Excel in italiano, intestazione ripetuta o sola | Superato (test automatici) |
 | Importazione di un registro prodotto davvero dall'app Torque | **Non provata**: solo file scritti da OBDio o a mano |
 | Riproduzione, importazione ed esportazione nell'interfaccia, in demo | Schermate dal collaudo automatico (esportazione Torque, anteprima dell'importazione, riproduzione con il cruscotto «Guida», salto e pausa con la pagina Sensori); trascinamento del cursore col mouse **non provato** |
+| Avviso «L'ultima volta OBDio si è chiuso per un errore» e scheda Registri nell'interfaccia; esiti BLE (accesso negato, errore interno, thread di lavoro fermo) con `OBDIO_PROVA_BLE=1` | Schermate dal collaudo automatico; pulsanti premuti a mano **non provati** |
+| Diagnosi `OBDio.exe --diagnosi-ble` | Solo compilata e provata nella scelta del dispositivo (test): **non eseguita** su un adattatore |
 | Scansione BLE reale su un PC Windows 11 | Funziona (dispositivi elencati); nessun Carista presente |
-| Connessione BLE a un adattatore reale | **Non provata** |
+| Connessione BLE a un adattatore reale | **Non provata** con esito positivo: vedi la riga seguente |
+| Chiusura improvvisa durante il collegamento BLE a un Carista reale (segnalata con la 1.0.0 su un altro PC Windows 11: Carista `00:11:22:33:44:55` visto a −55 dBm, «Collegamento all'adattatore…» per circa 13 s, poi la finestra sparisce senza messaggi) | **Correzione non confermata sull'adattatore.** Non riproducibile qui (nessun Carista sulla macchina di sviluppo). Causa sospettata, non provata: un `unwrap()` di btleplug 0.13.5 dentro un gestore di eventi WinRT (`MaxPduSizeChanged`, `MaxPduSize()` che fallisce mentre il collegamento cade); da Rust 1.81 un panic lì abortisce il processo. Cambiato: btleplug incluso in `vendor/btleplug` con tutti i panic dei percorsi WinRT tolti ([PATCH_OBDIO.md](vendor/btleplug/PATCH_OBDIO.md)); registro degli errori scritto prima di un abort (provato con un processo di prova che va in panic in un callback `extern "system"`), registro dei collegamenti passo per passo, avviso al riavvio; errori interni del thread di lavoro intercettati (provato con un trasporto di prova che va in panic); tempi massimi e messaggi per ogni passo BLE, un nuovo tentativo, scansione fermata prima di collegarsi, accesso negato riconosciuto; diagnosi `OBDio.exe --diagnosi-ble`. Da fare sul PC della segnalazione: riprovare e inviare la cartella `registri` (vedi [docs/DIAGNOSI_PROBLEMI.md](docs/DIAGNOSI_PROBLEMI.md)) |
 | Connessione seriale/SPP a un adattatore reale | **Non provata** |
 | Lettura da una centralina reale (208 o altro) | **Non provata** |
 

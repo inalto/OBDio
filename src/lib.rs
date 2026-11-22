@@ -7,6 +7,7 @@
 //! - [`obd`]: decodifica delle risposte OBD-II;
 //! - [`diagnosis`]: lettura di DTC, prontezza, fermo immagine, Mode 06;
 //! - [`recording`]: sessioni su disco ed esportazione CSV;
+//! - [`registri`]: registro degli errori fatali e dei passi di collegamento;
 //! - [`scambio`]: importazione ed esportazione (CSV OBDio, CSV in stile Torque, JSON);
 //! - [`riproduzione`]: riproduzione in tempo reale di una sessione registrata;
 //! - [`mqtt`]: pubblicazione in tempo reale su un broker MQTT;
@@ -19,6 +20,7 @@
 #[cfg(not(target_os = "android"))]
 pub mod aggiornamenti;
 pub mod config;
+pub mod diagnosi_ble;
 pub mod diagnosis;
 pub mod elm;
 pub mod mcp;
@@ -27,6 +29,7 @@ pub mod mqtt;
 pub mod obd;
 pub mod piattaforma;
 pub mod recording;
+pub mod registri;
 pub mod riproduzione;
 pub mod scambio;
 pub mod summary;
@@ -39,6 +42,8 @@ pub mod worker;
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 fn android_main(app: android_activity::AndroidApp) {
+    // Prima di tutto: un panic da qui in poi finisce nel registro degli errori.
+    registri::installa_gestore_panic();
     android_logger::init_once(
         android_logger::Config::default().with_max_level(log::LevelFilter::Info),
     );

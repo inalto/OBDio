@@ -646,7 +646,8 @@ impl App {
             paragrafo(
                 ui,
                 "Inserisci l'adattatore nella presa OBD con il quadro acceso e chiudi sul \
-                 telefono le app collegate all'adattatore. Non serve associarlo in Windows.",
+                 telefono le app collegate all'adattatore. Di norma non serve associarlo in \
+                 Windows: fallo solo se l'app lo suggerisce.",
             );
             ui.add_space(tema::SP_2);
             let scelto = self.ble_scelto.clone();

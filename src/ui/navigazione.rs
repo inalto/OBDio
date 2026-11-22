@@ -472,6 +472,62 @@ impl App {
                 self.errore = None;
             }
         }
+        self.avviso_chiusura_per_errore(ui, stretto);
+    }
+
+    /// Avviso, senza bloccare nulla, che l'ultima esecuzione è finita con un
+    /// errore registrato (vedi [`crate::registri::errori_dall_ultima_chiusura`]).
+    fn avviso_chiusura_per_errore(&mut self, ui: &mut egui::Ui, stretto: bool) {
+        let Some(avviso) = self.avviso_errore.clone() else {
+            return;
+        };
+        let mut chiudi = false;
+        egui::Frame::new()
+            .fill(tema::velatura(tema::ATTENZIONE, 0.12))
+            .stroke(egui::Stroke::new(tema::BORDO_SOTTILE, tema::ATTENZIONE))
+            .corner_radius(egui::CornerRadius::same(tema::RAGGIO_CONTROLLO))
+            .inner_margin(egui::Margin::symmetric(tema::SP_3 as i8, tema::SP_2 as i8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new("L'ultima volta OBDio si è chiuso per un errore")
+                        .strong()
+                        .color(tema::TESTO),
+                );
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "I dettagli sono nel registro degli errori. Se il problema si \
+                             ripete, invia il registro (e quello dei collegamenti, nella stessa \
+                             cartella) a chi ti assiste.",
+                        )
+                        .color(tema::TESTO),
+                    )
+                    .wrap(),
+                );
+                if !stretto {
+                    componenti::nota(ui, avviso.file.display().to_string());
+                }
+                ui.add_space(tema::SP_1);
+                ui.horizontal_wrapped(|ui| {
+                    if ui.button("Apri il registro").clicked() {
+                        crate::piattaforma::apri_file(&avviso.file);
+                    }
+                    if ui.button("Apri la cartella").clicked()
+                        && let Some(d) = avviso.file.parent()
+                    {
+                        crate::piattaforma::apri_cartella(d);
+                    }
+                    if ui.button("Chiudi").clicked() {
+                        chiudi = true;
+                    }
+                });
+            });
+        ui.add_space(tema::SP_2);
+        if chiudi {
+            crate::registri::segna_errori_visti();
+            self.avviso_errore = None;
+        }
     }
 
     // ------------------------------------------------------------------

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::obd::frames::{BusKind, EcuMessage, assemble};
 use crate::obd::{ObdRequest, supported_from_mask};
+use crate::registri::Diario;
 use crate::transport::{Scollegato, Transport};
 
 /// Comandi di configurazione dell'adattatore. Agiscono solo sull'adattatore,
@@ -252,6 +253,8 @@ pub struct Elm {
     /// Se attivo, gli scambi vengono annotati nel registro.
     pub traccia: bool,
     registro: Vec<String>,
+    /// Copia immediata di ogni riga del registro (registro dei collegamenti).
+    diario: Diario,
 }
 
 impl Elm {
@@ -261,7 +264,18 @@ impl Elm {
             kind: BusKind::Can11,
             traccia: true,
             registro: Vec::new(),
+            diario: Diario::muto(),
         }
+    }
+
+    /// Ogni riga annotata nel registro va anche, subito, in questo diario.
+    pub fn imposta_diario(&mut self, diario: Diario) {
+        self.diario = diario;
+    }
+
+    fn annota(&mut self, riga: String) {
+        self.diario.passo(format!("ELM {riga}"));
+        self.registro.push(riga);
     }
 
     pub fn is_demo(&self) -> bool {
@@ -302,7 +316,7 @@ impl Elm {
             let ora = Instant::now();
             if ora >= scadenza {
                 if self.traccia {
-                    self.registro.push(format!("→ {cmd}   ← (timeout)"));
+                    self.annota(format!("→ {cmd}   ← (timeout)"));
                 }
                 return Err(ElmError::Timeout);
             }
@@ -328,11 +342,9 @@ impl Elm {
             .collect();
         if self.traccia {
             if riservato {
-                self.registro
-                    .push(format!("→ {cmd}   ← (risposta omessa dal registro)"));
+                self.annota(format!("→ {cmd}   ← (risposta omessa dal registro)"));
             } else {
-                self.registro
-                    .push(format!("→ {cmd}   ← {}", righe.join(" | ")));
+                self.annota(format!("→ {cmd}   ← {}", righe.join(" | ")));
             }
         }
         Ok(righe)

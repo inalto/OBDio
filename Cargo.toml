@@ -1,6 +1,6 @@
 [package]
 name = "obdio"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 rust-version = "1.93"
 description = "Lettore diagnostico OBD-II/EOBD per adattatori ELM327 (Carista) su Windows; in lettura, salvo la cancellazione confermata dei codici guasto"
@@ -30,6 +30,9 @@ uuid = "1"
 rumqttc = { version = "0.25", default-features = false }
 # Solo per il token del server MCP: numeri casuali dal sistema operativo.
 getrandom = "0.4"
+# Messaggi di btleplug inoltrati al registro dei collegamenti (docs/DIAGNOSI_PROBLEMI.md);
+# su Android vanno al registro di sistema con android_logger.
+log = "0.4"
 png = { version = "0.18", optional = true }
 
 # Porte seriali: su Android non si possono elencare (vedi docs/ANDROID.md).
@@ -48,7 +51,6 @@ sha2 = { version = "0.11", default-features = false }
 eframe = { version = "0.35", default-features = false, features = ["glow", "default_fonts", "android-game-activity"] }
 android-activity = { version = "0.6", features = ["game-activity"] }
 android_logger = "0.15"
-log = "0.4"
 
 # Su Linux e BSD `rfd` ha bisogno di un'implementazione: il portale XDG
 # (libdbus oppure zenity a tempo di esecuzione), senza compilare codice C.
@@ -60,7 +62,20 @@ rfd = { version = "0.18", default-features = false, features = ["xdg-portal"] }
 # (variabile d'ambiente OBDIO_COLLAUDO=<cartella>). Non incluso nel pacchetto.
 collaudo = ["dep:png"]
 
+# btleplug 0.13.5 con le correzioni di OBDio: niente panic nei callback WinRT,
+# dove un panic abortisce il processo (vedi vendor/btleplug/PATCH_OBDIO.md).
+[patch.crates-io]
+btleplug = { path = "vendor/btleplug" }
+
 [profile.release]
 opt-level = 3
 lto = "thin"
-strip = true
+# Backtrace leggibili nel registro degli errori (docs/DIAGNOSI_PROBLEMI.md).
+# Su Windows (MSVC) i simboli stanno nel file .pdb, non nell'eseguibile: con
+# le sole tabelle delle righe e `strip = "none"` l'eseguibile cresce di poco
+# e, con `obdio_desktop.pdb` della stessa build accanto a `OBDio.exe`, il
+# backtrace riporta funzioni, file e righe. Su altre piattaforme le tabelle
+# finirebbero nel binario: lì si può tornare a `strip = true` con
+# `CARGO_PROFILE_RELEASE_STRIP=true`.
+debug = "line-tables-only"
+strip = "none"

@@ -286,7 +286,208 @@ fn esegui_coda(c: &mut Collaudo, ctx: &egui::Context) -> bool {
     true
 }
 
+// ---------------------------------------------------------------------------
+// Prova degli esiti di un collegamento BLE reale (`OBDIO_PROVA_BLE=1`)
+// ---------------------------------------------------------------------------
+
+/// Una scena della prova BLE: per `durata` secondi l'app viene messa nello
+/// stato che avrebbe dopo quell'esito. `istante` va da 0 a `durata`.
+struct ScenaBle {
+    /// Nome della schermata (`ble_<nome>.png`) se c'è `OBDIO_COLLAUDO`.
+    nome: &'static str,
+    durata: f32,
+    imposta: fn(app: &mut App, istante: f32),
+}
+
+/// GATT come quello di un adattatore FFF0 (nome e indirizzo del Carista della
+/// segnalazione), con o senza profilo riconosciuto.
+fn gatt_di_prova(profilo: Option<&str>) -> crate::transport::ble::GattInfo {
+    use crate::transport::ble::{GattInfo, GattServizio};
+    let breve = |v: &str| format!("0000{v}-0000-1000-8000-00805f9b34fb");
+    GattInfo {
+        nome: "Carista".into(),
+        indirizzo: "00:11:22:33:44:55".into(),
+        servizi: vec![
+            GattServizio {
+                uuid: breve("1800"),
+                caratteristiche: vec![(breve("2a00"), "lettura".into())],
+            },
+            GattServizio {
+                uuid: breve("fff0"),
+                caratteristiche: vec![
+                    (breve("fff1"), "notifica".into()),
+                    (breve("fff2"), "scrittura, scrittura senza risposta".into()),
+                ],
+            },
+        ],
+        profilo: profilo.map(str::to_string),
+        fonte_profilo: profilo.map(|_| "prova".to_string()),
+    }
+}
+
+/// Errore mostrato da una scena, senza collegamento.
+fn scena_errore(app: &mut App, errore: crate::worker::ErroreUtente) {
+    app.scheda = Scheda::Connessione;
+    app.gatt_sconosciuto = None;
+    app.info = None;
+    app.errore = Some(errore);
+}
+
+/// Le scene, in ordine. Per aggiungere un esito basta una voce.
+const SCENE_BLE: [ScenaBle; 8] = [
+    // Profilo GATT sconosciuto: fascia d'errore ed elenco degli UUID.
+    ScenaBle {
+        nome: "profilo_sconosciuto",
+        durata: 2.0,
+        imposta: |app, _| {
+            scena_errore(app, crate::worker::ErroreUtente::ProfiloBleSconosciuto);
+            app.gatt_sconosciuto = Some(gatt_di_prova(None));
+        },
+    },
+    ScenaBle {
+        nome: "non_raggiungibile",
+        durata: 1.5,
+        imposta: |app, _| {
+            scena_errore(
+                app,
+                crate::worker::ErroreUtente::AdattatoreNonRaggiungibile(
+                    "connessione radio: nessuna risposta entro 15 s (tempo scaduto)".into(),
+                ),
+            )
+        },
+    },
+    ScenaBle {
+        nome: "accesso_negato",
+        durata: 1.5,
+        imposta: |app, _| {
+            scena_errore(
+                app,
+                crate::worker::ErroreUtente::AccessoBleNegato(
+                    "attivazione delle notifiche: Windows UWP threw error on subscribe: \
+                     GattCommunicationStatus(3) (accesso negato)"
+                        .into(),
+                ),
+            )
+        },
+    },
+    ScenaBle {
+        nome: "non_risponde",
+        durata: 1.5,
+        imposta: |app, _| {
+            scena_errore(
+                app,
+                crate::worker::ErroreUtente::AdattatoreNonRisponde("timeout".into()),
+            )
+        },
+    },
+    ScenaBle {
+        nome: "errore_interno",
+        durata: 1.5,
+        imposta: |app, _| {
+            scena_errore(
+                app,
+                crate::worker::ErroreUtente::ErroreInterno("il collegamento".into()),
+            )
+        },
+    },
+    ScenaBle {
+        nome: "lavoro_fermo",
+        durata: 1.0,
+        imposta: |app, _| scena_errore(app, crate::worker::ErroreUtente::LavoroFermo),
+    },
+    // L'avviso della chiusura per errore all'avvio, sopra la pagina.
+    ScenaBle {
+        nome: "avviso_chiusura",
+        durata: 1.0,
+        imposta: |app, _| {
+            app.errore = None;
+            app.avviso_errore = Some(crate::registri::ErroriNuovi {
+                file: crate::registri::percorso_errori(),
+            });
+        },
+    },
+    // Collegato con il GATT vero: tutte le pagine, senza dati.
+    ScenaBle {
+        nome: "collegato",
+        durata: 3.0,
+        imposta: |app, istante| {
+            app.avviso_errore = None;
+            app.errore = None;
+            if app.info.is_none() {
+                app.info = Some(crate::worker::InfoConn {
+                    collegamento: "Bluetooth LE Carista [00:11:22:33:44:55]".into(),
+                    adattatore: "ELM327 v1.4".into(),
+                    protocollo: "ISO 15765-4 CAN, ID a 11 bit, 500 kbit/s".into(),
+                    protocollo_numero: 6,
+                    ecu: vec!["7E8".into()],
+                    gatt: Some(gatt_di_prova(Some("FFF0 (FFF1 notifica, FFF2 scrittura)"))),
+                    ..Default::default()
+                });
+            }
+            app.scheda = match (istante / 0.5) as u32 {
+                0 => Scheda::Connessione,
+                1 => Scheda::Diagnosi,
+                2 => Scheda::Cruscotto,
+                3 => Scheda::Sensori,
+                4 => Scheda::Sessioni,
+                _ => Scheda::Impostazioni,
+            };
+        },
+    },
+];
+
+/// Prova degli stati che la demo non raggiunge mai: gli esiti del
+/// collegamento a un dispositivo BLE reale (vedi [`SCENE_BLE`]). Si attiva con
+/// `OBDIO_PROVA_BLE=1`; scorre le scene e chiude la finestra da sola.
+fn prova_ble(app: &mut App, ctx: &egui::Context) -> bool {
+    use std::sync::OnceLock;
+    static INIZIO: OnceLock<Instant> = OnceLock::new();
+    if std::env::var_os("OBDIO_PROVA_BLE").is_none() {
+        return false;
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(50));
+    // Con `OBDIO_COLLAUDO` una schermata per scena, verso la fine della scena.
+    if let Some(c) = app.collaudo.as_mut()
+        && let Some(nome) = c.scatto.clone()
+    {
+        let immagine = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(img) = immagine {
+            if let Err(e) = salva(&c.cartella.join(format!("{nome}.png")), &img) {
+                eprintln!("collaudo: schermata non salvata: {e}");
+            }
+            c.scatto = None;
+        }
+    }
+    let mut t = INIZIO.get_or_init(Instant::now).elapsed().as_secs_f32();
+    for (i, s) in SCENE_BLE.iter().enumerate() {
+        if t < s.durata {
+            (s.imposta)(app, t);
+            if let Some(c) = app.collaudo.as_mut()
+                && t > s.durata * 0.6
+                && c.scatto.is_none()
+                && c.fase as usize <= i
+            {
+                c.fase = i as u32 + 1;
+                c.scatto = Some(format!("ble_{}", s.nome));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
+            }
+            return true;
+        }
+        t -= s.durata;
+    }
+    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    true
+}
+
 pub fn passo(app: &mut App, ctx: &egui::Context) {
+    if prova_ble(app, ctx) {
+        return;
+    }
     let Some(mut c) = app.collaudo.take() else {
         return;
     };
@@ -692,9 +893,27 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
                 Azione::Scatta("largo_aggiornamenti_scaricamento".into()),
             ]);
         }
+        // Avviso all'avvio dopo una chiusura per errore (registro d'esempio:
+        // nulla viene scritto), poi la scheda Registri delle Impostazioni.
         71 => {
             app.aggiornamenti.in_corso = None;
             app.aggiornamenti.fissa_alla_scheda = false;
+            app.avviso_errore = Some(crate::registri::ErroriNuovi {
+                file: crate::registri::percorso_errori(),
+            });
+            app.scheda = Scheda::Connessione;
+            c.avanti();
+        }
+        72 if c.secondi() > 0.8 => c.doppio("avviso_chiusura_per_errore"),
+        73 => {
+            app.avviso_errore = None;
+            app.registri.fissa_alla_scheda = true;
+            app.scheda = Scheda::Impostazioni;
+            c.avanti();
+        }
+        74 if c.secondi() > 1.0 => c.scatta("largo_registri"),
+        75 => {
+            app.registri.fissa_alla_scheda = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             c.avanti();
         }

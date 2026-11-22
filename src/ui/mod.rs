@@ -174,6 +174,12 @@ pub struct App {
     // Impostazioni (aggiornamenti da GitHub; non su Android)
     #[cfg(not(target_os = "android"))]
     pub(crate) aggiornamenti: impostazioni_aggiornamenti::StatoAggiornamentiUi,
+    // Impostazioni (registri degli errori e dei collegamenti)
+    pub(crate) registri: impostazioni::StatoRegistri,
+    /// L'ultima esecuzione è finita con un errore registrato: avviso in alto.
+    pub(crate) avviso_errore: Option<crate::registri::ErroriNuovi>,
+    /// Per riavviare il thread di lavoro se si ferma.
+    ctx: egui::Context,
 
     #[cfg(feature = "collaudo")]
     collaudo: Option<collaudo::Collaudo>,
@@ -213,6 +219,17 @@ impl App {
         if mcp.config.attivo {
             let _ = tx.send(Comando::ConfiguraMcp(mcp.config.clone()));
         }
+        #[cfg(feature = "collaudo")]
+        let collaudo = collaudo::Collaudo::da_ambiente();
+        // Nel collaudo automatico l'avviso compare solo quando lo mostra lui.
+        #[cfg(feature = "collaudo")]
+        let avviso_errore = if collaudo.is_some() {
+            None
+        } else {
+            crate::registri::errori_dall_ultima_chiusura()
+        };
+        #[cfg(not(feature = "collaudo"))]
+        let avviso_errore = crate::registri::errori_dall_ultima_chiusura();
         App {
             tx,
             rx,
@@ -264,9 +281,44 @@ impl App {
             mcp,
             #[cfg(not(target_os = "android"))]
             aggiornamenti: impostazioni_aggiornamenti::StatoAggiornamentiUi::carica(&cc.egui_ctx),
+            registri: Default::default(),
+            avviso_errore,
+            ctx: cc.egui_ctx.clone(),
             #[cfg(feature = "collaudo")]
-            collaudo: collaudo::Collaudo::da_ambiente(),
+            collaudo,
         }
+    }
+
+    /// Il thread di lavoro si è fermato (non dovrebbe mai: ogni comando è
+    /// protetto, vedi `worker`). Invece di lasciare l'interfaccia in attesa
+    /// per sempre lo dice e ne avvia uno nuovo, scollegato.
+    fn riavvia_lavoro(&mut self) {
+        if let Some(h) = self.lavoro.take() {
+            // Già finito: `join` non attende.
+            let _ = h.join();
+        }
+        let ctx = self.ctx.clone();
+        let (tx, rx, lavoro) = worker::avvia(self.cartella.clone(), move || ctx.request_repaint());
+        self.tx = tx;
+        self.rx = rx;
+        self.lavoro = Some(lavoro);
+        if crate::piattaforma::SERIALE_DISPONIBILE {
+            self.invia(Comando::ElencaSeriali);
+        }
+        if self.impostazioni.form.attivo {
+            self.invia(Comando::ConfiguraMqtt(self.impostazioni.form.clone()));
+        }
+        if self.mcp.config.attivo {
+            self.invia(Comando::ConfiguraMcp(self.mcp.config.clone()));
+        }
+        self.stato = StatoConn::Scollegato;
+        self.info = None;
+        self.polling = false;
+        self.registrazione = None;
+        self.riproduzione = None;
+        self.conferma_cancellazione = None;
+        self.errore = Some(ErroreUtente::LavoroFermo);
+        self.scheda = Scheda::Connessione;
     }
 
     pub(crate) fn invia(&self, c: Comando) {
@@ -331,7 +383,20 @@ impl App {
     }
 
     fn ricevi(&mut self) {
-        while let Ok(ev) = self.rx.try_recv() {
+        loop {
+            let ev = match self.rx.try_recv() {
+                Ok(ev) => ev,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    if self.lavoro.as_ref().is_some_and(|h| h.is_finished()) {
+                        self.riavvia_lavoro();
+                    }
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.riavvia_lavoro();
+                    break;
+                }
+            };
             match ev {
                 Evento::Stato(s) => self.stato = s,
                 Evento::DispositiviBle(d) => self.dispositivi = d,
@@ -579,6 +644,9 @@ impl Drop for App {
         if let Some(h) = self.lavoro.take() {
             let _ = h.join();
         }
+        // Chiusura regolare: gli errori registrati finora sono «visti» e al
+        // prossimo avvio non compare l'avviso.
+        crate::registri::segna_errori_visti();
         // «Riavvia ora» dopo un aggiornamento: la versione nuova parte solo
         // ora che registrazione, collegamenti e server sono chiusi.
         #[cfg(not(target_os = "android"))]

@@ -116,3 +116,39 @@ nel README, in [Stato delle verifiche](../README.md#stato-delle-verifiche).
   [AGGIORNAMENTI.md](AGGIORNAMENTI.md), che descrive anche i nomi dei file che
   un rilascio deve avere.
 - Su Android il controllo non esiste: l'app si aggiorna con il pacchetto.
+
+## 1.0.1 — Chiusure improvvise e diagnosi dei collegamenti
+
+Segnalazione: con la 1.0.0, su un altro PC Windows 11, collegando un Carista
+via Bluetooth LE la finestra spariva dopo circa 13 secondi, senza messaggi.
+Non è stato possibile riprodurla qui (manca l'adattatore): la correzione
+**non è confermata sul Carista**.
+
+- La libreria Bluetooth (btleplug 0.13.5) è inclusa nel progetto con le
+  correzioni di OBDio: niente più `unwrap()` dentro i gestori di eventi di
+  Windows, dove un errore chiude l'app all'istante. È la causa sospettata
+  (dettagli in `vendor/btleplug/PATCH_OBDIO.md`).
+- **Registro degli errori** (`registri\registro_errori.log`): ogni errore
+  interno con versione, sistema, punto del codice e backtrace, scritto sul
+  disco anche quando l'app sta per essere chiusa. Al riavvio compare l'avviso
+  «L'ultima volta OBDio si è chiuso per un errore».
+- **Registro dei collegamenti** (`registri\registro_collegamento.log`): ogni
+  passo di ogni collegamento con l'orario al millisecondo, compresi i servizi
+  GATT e gli scambi ELM327 iniziali (mai il VIN). Gli stessi passi compaiono
+  dal vivo nel registro degli scambi della pagina Connessione.
+- Nuova scheda **Registri** nelle Impostazioni: percorsi, **Apri la
+  cartella**, **Copia l'ultimo errore**.
+- Un errore interno durante un collegamento o una lettura non lascia più
+  l'app in attesa per sempre: il collegamento si chiude, la registrazione in
+  corso viene salvata e si può riprovare. Se il thread di lavoro si fermasse
+  comunque, l'app lo dice e ne avvia uno nuovo.
+- Collegamento Bluetooth più robusto: tempo massimo e messaggio propri per
+  ogni passo (connessione radio, servizi GATT, flusso e attivazione delle
+  notifiche), un nuovo tentativo automatico dopo un errore transitorio, la
+  scansione fermata sempre prima di collegarsi. Un adattatore che rifiuta
+  l'accesso GATT viene riconosciuto e l'app suggerisce di associarlo in
+  Windows o di usare la porta seriale.
+- **Diagnosi Bluetooth da terminale**: `OBDio.exe --diagnosi-ble [nome]` fa
+  scansione, connessione ed elenco dei servizi GATT, senza inviare comandi né
+  scrivere sull'adattatore, e salva un resoconto accanto all'eseguibile.
+  Istruzioni in [DIAGNOSI_PROBLEMI.md](DIAGNOSI_PROBLEMI.md).

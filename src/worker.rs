@@ -2,6 +2,7 @@
 //! avvengono qui, mai nel thread dell'interfaccia.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
@@ -99,6 +100,14 @@ pub enum ErroreUtente {
     CancellazioneNonEseguita(String),
     /// Operazione rifiutata perché è in corso la riproduzione di una sessione.
     Riproduzione(String),
+    /// Il dispositivo BLE rifiuta l'accesso GATT (accesso negato o errore di
+    /// protocollo): di solito vuole l'associazione in Windows.
+    AccessoBleNegato(String),
+    /// Errore interno (panic) nel thread di lavoro durante l'operazione
+    /// descritta: il collegamento è stato chiuso e il thread è ripartito.
+    ErroreInterno(String),
+    /// Il thread di lavoro si è fermato del tutto (visto dall'interfaccia).
+    LavoroFermo,
     Altro(String),
 }
 
@@ -115,6 +124,9 @@ impl ErroreUtente {
             ErroreUtente::Registrazione(_) => "Errore di registrazione",
             ErroreUtente::CancellazioneNonEseguita(_) => "Codici guasto non cancellati",
             ErroreUtente::Riproduzione(_) => "Non disponibile durante la riproduzione",
+            ErroreUtente::AccessoBleNegato(_) => "L'adattatore rifiuta l'accesso Bluetooth",
+            ErroreUtente::ErroreInterno(_) => "Errore interno",
+            ErroreUtente::LavoroFermo => "Errore interno",
             ErroreUtente::Altro(_) => "Errore",
         }
     }
@@ -122,7 +134,7 @@ impl ErroreUtente {
     pub fn messaggio(&self) -> String {
         match self {
             ErroreUtente::BluetoothSpento => {
-                "Attiva il Bluetooth in Windows (Impostazioni → Bluetooth e dispositivi) e riprova."
+                "Attiva il Bluetooth in Windows (Impostazioni > Bluetooth e dispositivi) e riprova."
                     .into()
             }
             ErroreUtente::NessunBluetooth => {
@@ -134,6 +146,22 @@ impl ErroreUtente {
                  inserito nella presa OBD, alimentato e non collegato a un altro dispositivo \
                  (telefono). Dettaglio: {d}"
             ),
+            ErroreUtente::AccessoBleNegato(d) => format!(
+                "L'adattatore ha risposto ma rifiuta l'accesso ai suoi servizi Bluetooth. Molti \
+                 adattatori (anche quelli Bluetooth Classic + LE come il Carista) lo concedono \
+                 solo dopo l'associazione: in Windows apri Impostazioni > Bluetooth e \
+                 dispositivi > Aggiungi dispositivo, associa l'adattatore e riprova. In \
+                 alternativa usa il collegamento seriale (porta COM), che lo stesso adattatore \
+                 offre dopo l'associazione. Nulla è stato inviato all'adattatore. Dettaglio: {d}"
+            ),
+            ErroreUtente::ErroreInterno(cosa) => format!(
+                "Errore interno durante {cosa}: il collegamento è stato chiuso. Dettagli nel \
+                 registro degli errori."
+            ),
+            ErroreUtente::LavoroFermo => "Il thread di lavoro dell'app si è fermato per un \
+                 errore interno: il collegamento è chiuso ed è stato riavviato da capo. Puoi \
+                 riprovare; i dettagli sono nel registro degli errori (Impostazioni > Registri)."
+                .into(),
             ErroreUtente::ProfiloBleSconosciuto => {
                 "Il dispositivo è collegato ma i suoi servizi GATT non corrispondono a un profilo \
                  seriale documentato: l'app non scrive su caratteristiche scelte per tentativi. \
@@ -406,6 +434,34 @@ const INTERVALLO_STATO_RIPRODUZIONE: Duration = Duration::from_millis(250);
 /// un'azione chiesta da un assistente.
 const ATTESA_CON_MCP: Duration = Duration::from_millis(40);
 
+/// Esegue `f` ignorando un suo eventuale panic (usata solo per rimettere in
+/// ordine dopo un altro panic).
+fn senza_panic(f: impl FnOnce()) {
+    let _ = std::panic::catch_unwind(AssertUnwindSafe(f));
+}
+
+impl Comando {
+    /// L'operazione, per il messaggio «Errore interno durante …».
+    pub fn descrizione(&self) -> &'static str {
+        match self {
+            Comando::ScansionaBle | Comando::FermaScansione => "la scansione Bluetooth",
+            Comando::ElencaSeriali => "l'elenco delle porte seriali",
+            Comando::Collega(_) => "il collegamento",
+            Comando::Scollega => "lo scollegamento",
+            Comando::LeggiDiagnosi => "la lettura della diagnosi",
+            Comando::CancellaDtc(_) => "la cancellazione dei codici guasto",
+            Comando::AvviaPolling { .. } | Comando::FermaPolling => "la lettura dei sensori",
+            Comando::AvviaRegistrazione | Comando::FermaRegistrazione | Comando::Marcatore(_) => {
+                "la registrazione"
+            }
+            Comando::ConfiguraMqtt(_) => "la configurazione MQTT",
+            Comando::ConfiguraMcp(_) => "la configurazione del server MCP",
+            Comando::Riproduzione(_) => "la riproduzione della sessione",
+            Comando::Esci => "la chiusura",
+        }
+    }
+}
+
 /// Riproduzione in corso (al posto di un collegamento).
 struct Riproduzione {
     motore: Riproduttore,
@@ -503,28 +559,105 @@ impl Worker {
                     Err(RecvTimeoutError::Disconnected) => Some(Comando::Esci),
                 }
             };
-            if let Some(cmd) = cmd
-                && !self.gestisci(cmd)
-            {
-                break;
+            if let Some(cmd) = cmd {
+                let cosa = cmd.descrizione();
+                if self.protetto(cosa, |w| w.gestisci(cmd)) == Some(false) {
+                    break;
+                }
             }
             // Azioni chieste via MCP: mai `Esci` né la cancellazione dei codici.
             while let Some(azione) = self.mcp.prossima_azione() {
-                self.gestisci(azione);
+                let cosa = azione.descrizione();
+                self.protetto(cosa, |w| w.gestisci(azione));
             }
-            self.passo_scansione();
-            self.passo_polling();
-            self.passo_riproduzione();
-            self.passo_mqtt();
-            self.passo_mcp();
+            self.protetto("la scansione Bluetooth", Self::passo_scansione);
+            self.protetto("la lettura dei sensori", Self::passo_polling);
+            self.protetto("la riproduzione della sessione", Self::passo_riproduzione);
+            self.protetto("la pubblicazione MQTT", Self::passo_mqtt);
+            self.protetto("il server MCP", Self::passo_mcp);
         }
-        self.ferma_scansione();
-        self.chiudi_link(None, false);
-        self.chiudi_riproduzione(false);
-        if let Some(m) = self.mqtt.take() {
-            m.ferma();
+        // Ogni chiusura per conto suo: un errore nella prima non impedisce di
+        // chiudere la registrazione.
+        self.protetto("la chiusura", Self::ferma_scansione);
+        self.protetto("la chiusura", |w| w.chiudi_link(None, false));
+        self.protetto("la chiusura", |w| w.chiudi_riproduzione(false));
+        self.protetto("la chiusura", |w| {
+            if let Some(m) = w.mqtt.take() {
+                m.ferma();
+            }
+            w.mcp.ferma();
+        });
+    }
+
+    // ---- Errori interni ------------------------------------------------
+
+    /// Esegue `f` e, se va in panic, riporta il thread a uno stato pulito e
+    /// scollegato invece di farlo morire (l'interfaccia resterebbe ad
+    /// aspettare per sempre). `cosa` descrive l'operazione per l'utente
+    /// («il collegamento», «la lettura dei sensori»…).
+    ///
+    /// `AssertUnwindSafe` è voluto: dopo un panic lo stato del collegamento non
+    /// è più affidabile e viene scartato tutto da [`Self::ripristina`], tranne
+    /// la registrazione, che viene chiusa per conservarne i dati.
+    fn protetto<R>(&mut self, cosa: &str, f: impl FnOnce(&mut Self) -> R) -> Option<R> {
+        match std::panic::catch_unwind(AssertUnwindSafe(|| f(self))) {
+            Ok(r) => Some(r),
+            Err(carico) => {
+                let dettaglio = carico
+                    .downcast_ref::<&str>()
+                    .map(|s| s.to_string())
+                    .or_else(|| carico.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "(messaggio non testuale)".into());
+                self.ripristina(cosa, &dettaglio);
+                None
+            }
         }
-        self.mcp.ferma();
+    }
+
+    /// Stato pulito dopo un panic: registrazione chiusa (i dati già scritti
+    /// restano), polling fermo, collegamento e riproduzione chiusi, scansione
+    /// ferma. Ogni passo è a sua volta protetto: se fallisce si va avanti.
+    fn ripristina(&mut self, cosa: &str, dettaglio: &str) {
+        let diario = crate::registri::Diario::su_file();
+        diario.passo(format!(
+            "Errore interno durante {cosa}: {dettaglio}. Collegamento chiuso."
+        ));
+        // 1. Registrazione: chiusa con il flush, così il file resta leggibile.
+        senza_panic(|| self.ferma_registrazione());
+        // 2. Collegamento: polling fermo, trasporto chiuso. Se anche la
+        //    chiusura va in panic, il trasporto viene comunque abbandonato.
+        if let Some(mut l) = self.link.take() {
+            l.piano = None;
+            if let Some(r) = l.recorder.take() {
+                // Chiusura non riuscita sopra: almeno il flush del buffer.
+                senza_panic(|| drop(r.chiudi()));
+            }
+            senza_panic(|| l.elm.chiudi());
+            senza_panic(|| drop(l));
+        }
+        // 3. Riproduzione e scansione.
+        self.riproduzione = None;
+        if self.scansione.take().is_some()
+            && let Some(b) = &self.ble
+        {
+            senza_panic(|| b.ferma_scansione());
+        }
+        // Il gestore Bluetooth può essere rimasto a metà: si ricrea alla
+        // prossima richiesta.
+        if let Some(b) = self.ble.take() {
+            senza_panic(|| drop(b));
+        }
+        if let Some(m) = &self.mqtt {
+            senza_panic(|| m.scollegato());
+        }
+        senza_panic(|| {
+            self.invia(Evento::Polling(false));
+            self.invia(Evento::Errore(ErroreUtente::ErroreInterno(
+                cosa.to_string(),
+            )));
+            self.invia(Evento::Scollegato { motivo: None });
+            self.stato(StatoConn::Scollegato);
+        });
     }
 
     // ---- MCP -----------------------------------------------------------
@@ -719,9 +852,19 @@ impl Worker {
                     rt
                 }
             };
-            self.ble = Some(BleManager::new(rt)?);
+            // I passi BLE vanno nel registro dei collegamenti e, subito, nel
+            // registro degli scambi dell'app (anche mentre il collegamento è
+            // in corso e questo thread è bloccato ad aspettarlo).
+            let tx = self.tx.clone();
+            let eco: crate::registri::Eco = Arc::new(move |riga| {
+                let _ = tx.send(Evento::Registro(vec![format!("BLE {riga}")]));
+            });
+            let diario = crate::registri::Diario::su_file().con_eco(eco);
+            self.ble = Some(BleManager::new(rt)?.con_diario(diario));
         }
-        Ok(self.ble.as_ref().expect("appena creato"))
+        self.ble
+            .as_ref()
+            .ok_or_else(|| BleErrore::Altro("gestore Bluetooth non disponibile".into()))
     }
 
     fn errore_ble(&self, e: BleErrore) {
@@ -729,6 +872,7 @@ impl Worker {
             BleErrore::NessunAdattatore => ErroreUtente::NessunBluetooth,
             BleErrore::BluetoothSpento => ErroreUtente::BluetoothSpento,
             BleErrore::NonRaggiungibile(d) => ErroreUtente::AdattatoreNonRaggiungibile(d),
+            BleErrore::AccessoNegato(d) => ErroreUtente::AccessoBleNegato(d),
             BleErrore::ProfiloSconosciuto(info) => {
                 self.invia(Evento::GattSconosciuto(info));
                 ErroreUtente::ProfiloBleSconosciuto
@@ -804,6 +948,17 @@ impl Worker {
         self.stato(StatoConn::Connessione(
             "Collegamento all'adattatore…".into(),
         ));
+        // Solo i collegamenti a un adattatore vero finiscono nel registro dei
+        // collegamenti su disco (non la demo né i trasporti delle verifiche).
+        let diario = match &sorgente {
+            Sorgente::Ble(_) | Sorgente::Seriale { .. } => crate::registri::Diario::su_file(),
+            _ => crate::registri::Diario::muto(),
+        };
+        if let Sorgente::Seriale { porta, baud } = &sorgente {
+            diario.passo(format!(
+                "=== Collegamento seriale a {porta} ({baud} baud): inizio ==="
+            ));
+        }
 
         // 1. Collegamento fisico.
         let mut gatt = None;
@@ -812,8 +967,12 @@ impl Worker {
             Sorgente::Trasporto(t) => t,
             Sorgente::Riproduzione(_) => unreachable!("gestita sopra"),
             Sorgente::Seriale { porta, baud } => match SerialTransport::apri(&porta, baud) {
-                Ok(t) => Box::new(t),
+                Ok(t) => {
+                    diario.passo(format!("Porta {porta} aperta"));
+                    Box::new(t)
+                }
                 Err(e) => {
+                    diario.passo(format!("Apertura di {porta} fallita: {e}"));
                     self.invia(Evento::Errore(ErroreUtente::AdattatoreNonRaggiungibile(
                         format!("apertura di {porta} fallita: {e}"),
                     )));
@@ -837,8 +996,18 @@ impl Worker {
             }
         };
         let mut elm = Elm::new(trasporto);
+        // Ogni scambio della sequenza iniziale va subito nel registro dei
+        // collegamenti (la risposta al VIN è omessa come nel registro degli
+        // scambi): se il processo si ferma, l'ultima riga è già su disco.
+        elm.imposta_diario(diario.clone());
         let fallimento = |w: &Worker, elm: &mut Elm, errore: ErroreUtente| {
+            diario.passo(format!(
+                "=== Collegamento fallito: {} — {} ===",
+                errore.titolo(),
+                errore.messaggio()
+            ));
             w.invia(Evento::Registro(elm.prendi_registro()));
+            elm.imposta_diario(crate::registri::Diario::muto());
             elm.chiudi();
             w.invia(Evento::Errore(errore));
             w.stato(StatoConn::Scollegato);
@@ -905,6 +1074,16 @@ impl Worker {
             ));
         }
         self.invia(Evento::Registro(elm.prendi_registro()));
+        diario.passo(format!(
+            "=== Collegato: {}; protocollo {} ({}); centraline {} ===",
+            elm.descrizione(),
+            protocollo.numero,
+            protocollo.descrizione,
+            supportati.keys().cloned().collect::<Vec<_>>().join(", ")
+        ));
+        // Dopo la sequenza iniziale il registro dei collegamenti non segue
+        // più gli scambi (diagnosi e polling restano fuori).
+        elm.imposta_diario(crate::registri::Diario::muto());
 
         let demo = elm.is_demo();
         let info = InfoConn {

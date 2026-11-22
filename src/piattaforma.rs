@@ -92,6 +92,20 @@ pub fn apri_cartella(percorso: &Path) {
     }
 }
 
+/// Apre un file di testo (un registro) nel Blocco note. Altrove non fa nulla.
+pub fn apri_file(percorso: &Path) {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("notepad.exe")
+            .arg(percorso)
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = percorso;
+    }
+}
+
 /// Cartella dei documenti dell'utente, se nota (Windows, Linux, macOS).
 pub fn cartella_documenti_utente() -> Option<PathBuf> {
     if cfg!(windows) {

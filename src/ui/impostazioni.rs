@@ -1,4 +1,4 @@
-//! Pagina Impostazioni: server MCP, pubblicazione MQTT, cartelle,
+//! Pagina Impostazioni: server MCP, pubblicazione MQTT, cartelle, registri,
 //! aggiornamenti, informazioni. La scheda del server MCP è in
 //! `impostazioni_mcp`, quella degli aggiornamenti in
 //! `impostazioni_aggiornamenti`.
@@ -11,6 +11,18 @@ use super::{App, GIALLO, GRIGIO, ROSSO, VERDE, apri_cartella, tema};
 use crate::config;
 use crate::mqtt::{Argomenti, Campo, MqttConfig, Problema, StatoMqtt, StatoMqttInfo};
 use crate::worker::Comando;
+
+/// Scheda «Registri».
+#[derive(Default)]
+pub(crate) struct StatoRegistri {
+    /// Esito dell'ultimo «Copia l'ultimo errore».
+    pub messaggio: Option<String>,
+    /// Distanza della scheda dall'inizio della pagina (per lo scorrimento).
+    pub y_scheda: f32,
+    /// Tiene la pagina scorsa alla scheda (collaudo automatico).
+    #[cfg_attr(not(feature = "collaudo"), allow(dead_code))]
+    pub fissa_alla_scheda: bool,
+}
 
 /// Stato della scheda: il modulo in modifica e l'ultimo stato comunicato dal
 /// thread di lavoro.
@@ -125,7 +137,9 @@ impl App {
         };
         #[cfg(target_os = "android")]
         let alla_scheda_aggiornamenti: Option<f32> = None;
-        if self.mcp.oltre_la_scheda {
+        if self.registri.fissa_alla_scheda && self.registri.y_scheda > 0.0 {
+            area = area.vertical_scroll_offset(self.registri.y_scheda);
+        } else if self.mcp.oltre_la_scheda {
             area = area.vertical_scroll_offset(self.mcp.altezza + tema::SP_3);
         } else if let Some(y) = alla_scheda_aggiornamenti {
             area = area.vertical_scroll_offset(y);
@@ -194,6 +208,8 @@ impl App {
                     }
                 }
             });
+            self.registri.y_scheda = ui.cursor().top() - origine;
+            self.scheda_registri(ui);
             #[cfg(not(target_os = "android"))]
             self.scheda_aggiornamenti(ui, stretto, origine);
             #[cfg(target_os = "android")]
@@ -231,6 +247,54 @@ impl App {
                 );
             });
             ui.add_space(tema::SP_4);
+        });
+    }
+
+    /// Registro degli errori e registro dei collegamenti: dove sono e come
+    /// recuperarli (vedi docs/DIAGNOSI_PROBLEMI.md).
+    fn scheda_registri(&mut self, ui: &mut egui::Ui) {
+        scheda_titolata(ui, "Registri", |ui| {
+            paragrafo(
+                ui,
+                "Se OBDio si chiude da solo o non riesce a collegarsi, questi due file dicono \
+                 che cosa è successo. Non contengono il VIN.",
+            );
+            ui.add_space(tema::SP_2);
+            let voci = [
+                (
+                    "Registro degli errori (errori interni, con i dettagli tecnici)",
+                    crate::registri::percorso_errori(),
+                ),
+                (
+                    "Registro dei collegamenti (ogni passo dei collegamenti all'adattatore)",
+                    crate::registri::percorso_collegamento(),
+                ),
+            ];
+            for (i, (nome, percorso)) in voci.iter().enumerate() {
+                if i > 0 {
+                    ui.add_space(tema::SP_2);
+                }
+                ui.label(*nome);
+                nota(ui, percorso.display().to_string());
+            }
+            ui.add_space(tema::SP_2);
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Apri la cartella").clicked() {
+                    apri_cartella(&crate::registri::cartella());
+                }
+                if ui.button("Copia l'ultimo errore").clicked() {
+                    self.registri.messaggio = Some(match crate::registri::ultimo_errore() {
+                        Some(testo) => {
+                            ui.ctx().copy_text(testo);
+                            "Ultimo errore copiato negli appunti.".into()
+                        }
+                        None => "Nessun errore registrato.".into(),
+                    });
+                }
+            });
+            if let Some(m) = &self.registri.messaggio {
+                nota(ui, m.clone());
+            }
         });
     }
 
