@@ -152,3 +152,25 @@ Non è stato possibile riprodurla qui (manca l'adattatore): la correzione
   scansione, connessione ed elenco dei servizi GATT, senza inviare comandi né
   scrivere sull'adattatore, e salva un resoconto accanto all'eseguibile.
   Istruzioni in [DIAGNOSI_PROBLEMI.md](DIAGNOSI_PROBLEMI.md).
+
+## 1.0.2 — Causa trovata della chiusura al collegamento Bluetooth
+
+I registri della 1.0.1 raccolti sul PC della segnalazione mostrano la causa
+vera: il collegamento al Carista riesce (profilo FFF0, notifiche attive in
+meno di 3 secondi), ma il primo comando inviato all'adattatore andava in
+panic con «there is no reactor running». Il tempo massimo della scrittura
+BLE (`tokio::time::timeout`) veniva creato dal thread di lavoro, fuori dal
+runtime asincrono.
+
+- Nella 1.0.0 lo stesso errore si ripeteva nello scollegamento durante il
+  panic: un doppio panic, cioè l'abort del processo. Da qui la finestra che
+  spariva. Nella 1.0.1 l'errore veniva intercettato e mostrato come errore
+  interno, ma il collegamento restava impossibile.
+- Corretto: il tempo massimo viene creato dentro il runtime
+  (`blocca_con_limite` in `src/transport/ble.rs`), con una prova di
+  regressione che non richiede hardware.
+- L'ipotesi della 1.0.1 (un `unwrap()` di btleplug in un gestore WinRT) non
+  era la causa di questa segnalazione; le correzioni in `vendor/btleplug`
+  restano come protezione.
+- Non ancora provato sull'adattatore: lo scambio dei comandi ELM327 via BLE
+  dopo questa correzione.

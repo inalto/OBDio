@@ -18,7 +18,7 @@ permette di inviare comandi liberi.
 [rilasci su GitHub](https://github.com/inalto/OBDio/releases/latest)
 (file `OBDio-<versione>-windows-x64.zip`). Licenza: [MIT](LICENSE).
 
-Versione 1.0.1. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
+Versione 1.0.2. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
 con codice P0420. Le novità rispetto alla prima versione, fase per fase, sono
 in [docs/NOVITA.md](docs/NOVITA.md).
 
@@ -680,7 +680,7 @@ non è verificabile: è un'ipotesi, non un dato.
 | Diagnosi `OBDio.exe --diagnosi-ble` | Solo compilata e provata nella scelta del dispositivo (test): **non eseguita** su un adattatore |
 | Scansione BLE reale su un PC Windows 11 | Funziona (dispositivi elencati); nessun Carista presente |
 | Connessione BLE a un adattatore reale | **Non provata** con esito positivo: vedi la riga seguente |
-| Chiusura improvvisa durante il collegamento BLE a un Carista reale (segnalata con la 1.0.0 su un altro PC Windows 11: Carista `00:11:22:33:44:55` visto a −55 dBm, «Collegamento all'adattatore…» per circa 13 s, poi la finestra sparisce senza messaggi) | **Correzione non confermata sull'adattatore.** Non riproducibile qui (nessun Carista sulla macchina di sviluppo). Causa sospettata, non provata: un `unwrap()` di btleplug 0.13.5 dentro un gestore di eventi WinRT (`MaxPduSizeChanged`, `MaxPduSize()` che fallisce mentre il collegamento cade); da Rust 1.81 un panic lì abortisce il processo. Cambiato: btleplug incluso in `vendor/btleplug` con tutti i panic dei percorsi WinRT tolti ([PATCH_OBDIO.md](vendor/btleplug/PATCH_OBDIO.md)); registro degli errori scritto prima di un abort (provato con un processo di prova che va in panic in un callback `extern "system"`), registro dei collegamenti passo per passo, avviso al riavvio; errori interni del thread di lavoro intercettati (provato con un trasporto di prova che va in panic); tempi massimi e messaggi per ogni passo BLE, un nuovo tentativo, scansione fermata prima di collegarsi, accesso negato riconosciuto; diagnosi `OBDio.exe --diagnosi-ble`. Da fare sul PC della segnalazione: riprovare e inviare la cartella `registri` (vedi [docs/DIAGNOSI_PROBLEMI.md](docs/DIAGNOSI_PROBLEMI.md)) |
+| Chiusura improvvisa durante il collegamento BLE a un Carista reale (segnalata con la 1.0.0 su un altro PC Windows 11) | **Causa trovata con i registri della 1.0.1, correzione (1.0.2) non ancora provata sull'adattatore.** Il collegamento riesce (profilo FFF0, notifiche attive); il primo comando inviato andava in panic perché il tempo massimo della scrittura BLE veniva creato fuori dal runtime asincrono («there is no reactor running»). Nella 1.0.0 lo stesso errore nello scollegamento causava un doppio panic e l'abort del processo. Corretto in `src/transport/ble.rs` con una prova di regressione. L'ipotesi precedente (un `unwrap()` di btleplug in un gestore WinRT) non era la causa; le correzioni in `vendor/btleplug` restano come protezione. Mai provato finora su hardware: lo scambio dei comandi ELM327 via BLE |
 | Connessione seriale/SPP a un adattatore reale | **Non provata** |
 | Lettura da una centralina reale (208 o altro) | **Non provata** |
 

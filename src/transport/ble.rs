@@ -207,6 +207,18 @@ fn blocca<F: Future>(rt: &Runtime, f: F) -> Result<F::Output, BleErrore> {
     Ok(rt.block_on(f))
 }
 
+/// Come [`blocca`], con un tempo massimo. `tokio::time::timeout` va creato
+/// DENTRO il runtime: costruito dal thread chiamante va in panic ("there is no
+/// reactor running"). Era la causa della chiusura al primo comando inviato a
+/// un adattatore BLE reale (1.0.0 e 1.0.1).
+fn blocca_con_limite<F: Future>(
+    rt: &Runtime,
+    limite: Duration,
+    f: F,
+) -> Result<Result<F::Output, tokio::time::error::Elapsed>, BleErrore> {
+    blocca(rt, async move { timeout(limite, f).await })
+}
+
 /// Dispositivo BLE visto durante la scansione.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BleDispositivo {
@@ -831,12 +843,10 @@ impl Transport for BleTransport {
         self.verifica()?;
         // 20 byte: carico utile garantito con l'MTU minima (23).
         for pezzo in data.chunks(20) {
-            let esito = blocca(
+            let esito = blocca_con_limite(
                 &self.rt,
-                timeout(
-                    Duration::from_secs(5),
-                    self.periferica.write(&self.scrittura, pezzo, self.tipo),
-                ),
+                Duration::from_secs(5),
+                self.periferica.write(&self.scrittura, pezzo, self.tipo),
             )
             .map_err(|e| Scollegato(e.testo()))?;
             let errore = match esito {
@@ -993,6 +1003,23 @@ mod tests {
                 assert_ne!(a.nome(), b.nome());
             }
         }
+    }
+
+    /// Regressione: dal thread di lavoro (fuori dal runtime) il tempo massimo
+    /// non deve andare in panic, sia quando scade sia quando non scade.
+    #[test]
+    fn blocca_con_limite_da_un_thread_fuori_dal_runtime() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let fatto = blocca_con_limite(&rt, Duration::from_secs(5), async { 7 }).unwrap();
+        assert_eq!(fatto.ok(), Some(7));
+        let scaduto =
+            blocca_con_limite(&rt, Duration::from_millis(20), std::future::pending::<()>())
+                .unwrap();
+        assert!(scaduto.is_err());
     }
 
     #[test]
