@@ -178,7 +178,12 @@ pub fn esegui() -> eframe::Result {
             .with_min_inner_size(tema::FINESTRA_MIN),
         ..Default::default()
     };
-    eframe::run_native("OBDio", opzioni, Box::new(|cc| Ok(Box::new(App::new(cc)))))
+    eframe::run_native("OBDio", opzioni, Box::new(|cc| Ok(crea_app(cc))))
+}
+
+/// Costruisce l'app: condivisa tra l'ingresso desktop e `android_main`.
+pub fn crea_app(cc: &eframe::CreationContext<'_>) -> Box<dyn eframe::App> {
+    Box::new(App::new(cc))
 }
 
 impl App {
@@ -187,7 +192,9 @@ impl App {
         let cartella = recording::cartella_sessioni();
         let ctx = cc.egui_ctx.clone();
         let (tx, rx, lavoro) = worker::avvia(cartella.clone(), move || ctx.request_repaint());
-        let _ = tx.send(Comando::ElencaSeriali);
+        if crate::piattaforma::SERIALE_DISPONIBILE {
+            let _ = tx.send(Comando::ElencaSeriali);
+        }
         let impostazioni = impostazioni::Impostazioni::carica();
         if impostazioni.form.attivo {
             let _ = tx.send(Comando::ConfiguraMqtt(impostazioni.form.clone()));
@@ -458,7 +465,7 @@ pub(crate) fn etichetta_stato(ui: &mut egui::Ui, stato: Stato) {
 }
 
 pub(crate) fn apri_cartella(percorso: &std::path::Path) {
-    let _ = std::process::Command::new("explorer").arg(percorso).spawn();
+    crate::piattaforma::apri_cartella(percorso);
 }
 
 impl eframe::App for App {

@@ -103,6 +103,11 @@ pub struct BleManager {
 
 impl BleManager {
     pub fn new(rt: Arc<Runtime>) -> Result<Self, BleErrore> {
+        // ANDROID: prima di `Manager::new()` btleplug richiede
+        // `btleplug::platform::init(&mut env)` con il `JNIEnv` della JVM
+        // (da `android_activity`), la parte Java di btleplug nell'APK e i
+        // permessi BLUETOOTH_SCAN/BLUETOOTH_CONNECT concessi a runtime.
+        // Non implementato: vedi docs/ANDROID.md.
         let adapter = rt.block_on(async {
             let manager = Manager::new()
                 .await

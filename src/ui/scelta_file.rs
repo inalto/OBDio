@@ -167,8 +167,7 @@ impl SceltaFile {
 
 /// Cartella proposta per importare ed esportare: i Documenti dell'utente.
 pub(crate) fn cartella_documenti() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .map(|u| PathBuf::from(u).join("Documents"))
+    crate::piattaforma::cartella_documenti_utente()
         .filter(|d| d.is_dir())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }

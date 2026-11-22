@@ -751,6 +751,12 @@ impl App {
 
     /// Porta seriale (Bluetooth Classic/SPP o USB).
     fn scheda_seriale(&mut self, ui: &mut egui::Ui, pieno: bool, libero: bool) {
+        if !crate::piattaforma::SERIALE_DISPONIBILE {
+            scheda_titolata(ui, "Porta seriale", |ui| {
+                paragrafo(ui, crate::piattaforma::NOTA_SERIALE_ASSENTE);
+            });
+            return;
+        }
         scheda_titolata(ui, "Porta seriale", |ui| {
             paragrafo(
                 ui,
