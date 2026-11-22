@@ -1,4 +1,5 @@
-//! Pagina Impostazioni: pubblicazione MQTT, cartelle, informazioni.
+//! Pagina Impostazioni: server MCP, pubblicazione MQTT, cartelle, informazioni.
+//! La scheda del server MCP è in `impostazioni_mcp`.
 
 use eframe::egui::{self, Color32, RichText, ScrollArea};
 
@@ -67,7 +68,7 @@ fn con_errore(
 
 /// Riga del modulo: sul largo etichetta a sinistra e campo a destra; sullo
 /// stretto etichetta sopra e campo a tutta larghezza.
-fn riga_modulo(
+pub(super) fn riga_modulo(
     ui: &mut egui::Ui,
     stretto: bool,
     etichetta: &str,
@@ -106,10 +107,17 @@ const LARGHEZZA_CAMPO: f32 = 340.0;
 impl App {
     pub(super) fn pagina_impostazioni(&mut self, ui: &mut egui::Ui) {
         let stretto = self.disposizione.stretta();
-        ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        let mut area = ScrollArea::vertical().auto_shrink(false);
+        if self.mcp.oltre_la_scheda {
+            area = area.vertical_scroll_offset(self.mcp.altezza + tema::SP_3);
+        } else if let Some(y) = self.mcp.scorri.take() {
+            area = area.vertical_scroll_offset(y);
+        }
+        area.show(ui, |ui| {
             if !stretto {
                 ui.set_max_width(800.0);
             }
+            self.scheda_mcp(ui, stretto);
             scheda_titolata(ui, "Pubblicazione MQTT", |ui| {
                 paragrafo(
                     ui,
@@ -151,7 +159,7 @@ impl App {
                 let cartelle = [
                     ("Sessioni registrate e importate", self.cartella.clone()),
                     (
-                        "Configurazione (cruscotti, MQTT)",
+                        "Configurazione (cruscotti, MQTT, MCP)",
                         config::cartella_configurazione(),
                     ),
                 ];

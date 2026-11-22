@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::diagnosis::{self, Contesto, DiagnosisReport};
 use crate::elm::{ConfermaCancellazione, Elm, ElmError, Esito, EsitoCancellazione};
+use crate::mcp::{McpConfig, Ospite, StatoMcpInfo};
 use crate::model::{Marker, Origine, Sample, Stato, adesso_iso};
 use crate::mqtt::{MqttConfig, MqttPublisher, StatoMqtt, StatoMqttInfo};
 use crate::obd::ObdRequest;
@@ -62,6 +63,8 @@ pub enum Comando {
     Marcatore(String),
     /// Avvia, riavvia o ferma la pubblicazione MQTT secondo la configurazione.
     ConfiguraMqtt(MqttConfig),
+    /// Avvia, riavvia o ferma il server MCP per assistenti AI.
+    ConfiguraMcp(McpConfig),
     /// Barra di trasporto della riproduzione (ignorato senza riproduzione).
     Riproduzione(ComandoRiproduzione),
     Esci,
@@ -236,6 +239,8 @@ pub enum Evento {
     Registro(Vec<String>),
     /// Stato della pubblicazione MQTT (a ogni cambiamento, al più due volte al secondo).
     Mqtt(StatoMqttInfo),
+    /// Stato del server MCP (a ogni cambiamento, al più due volte al secondo).
+    Mcp(StatoMcpInfo),
     /// Stato della riproduzione: a ogni cambiamento e alcune volte al secondo
     /// mentre scorre.
     Riproduzione(StatoRiproduzione),
@@ -397,6 +402,9 @@ const DURATA_SCANSIONE: Duration = Duration::from_secs(40);
 const PASSO_RIPRODUZIONE: Duration = Duration::from_millis(20);
 /// Intervallo fra due stati della riproduzione mentre scorre.
 const INTERVALLO_STATO_RIPRODUZIONE: Duration = Duration::from_millis(250);
+/// Attesa a riposo con il server MCP acceso: entro questo tempo parte
+/// un'azione chiesta da un assistente.
+const ATTESA_CON_MCP: Duration = Duration::from_millis(40);
 
 /// Riproduzione in corso (al posto di un collegamento).
 struct Riproduzione {
@@ -418,6 +426,8 @@ struct Worker {
     mqtt: Option<MqttPublisher>,
     /// Ultimo stato MQTT comunicato all'interfaccia e quando.
     mqtt_inviato: Option<(StatoMqttInfo, Instant)>,
+    /// Archivio e server MCP (vedi [`crate::mcp`]).
+    mcp: Ospite,
 }
 
 /// Avvia il thread di lavoro. `notifica` viene chiamata dopo ogni evento
@@ -431,6 +441,7 @@ pub fn avvia(
     let handle = std::thread::Builder::new()
         .name("obdio-lavoro".into())
         .spawn(move || {
+            let mcp = Ospite::new(cartella.clone());
             Worker {
                 rx: rx_cmd,
                 tx: tx_ev,
@@ -443,6 +454,7 @@ pub fn avvia(
                 riproduzione: None,
                 mqtt: None,
                 mqtt_inviato: None,
+                mcp,
             }
             .esegui();
         })
@@ -452,6 +464,8 @@ pub fn avvia(
 
 impl Worker {
     fn invia(&self, e: Evento) {
+        // L'archivio del server MCP vede ogni evento prima dell'interfaccia.
+        self.mcp.osserva(&e);
         let _ = self.tx.send(e);
         (self.notifica)();
     }
@@ -470,6 +484,9 @@ impl Worker {
                 .is_some_and(|r| r.motore.in_corso())
             {
                 PASSO_RIPRODUZIONE
+            } else if self.mcp.attivo() {
+                // Le azioni chieste da un assistente arrivano su una coda a parte.
+                ATTESA_CON_MCP
             } else {
                 Duration::from_millis(250)
             };
@@ -491,16 +508,37 @@ impl Worker {
             {
                 break;
             }
+            // Azioni chieste via MCP: mai `Esci` né la cancellazione dei codici.
+            while let Some(azione) = self.mcp.prossima_azione() {
+                self.gestisci(azione);
+            }
             self.passo_scansione();
             self.passo_polling();
             self.passo_riproduzione();
             self.passo_mqtt();
+            self.passo_mcp();
         }
         self.ferma_scansione();
         self.chiudi_link(None, false);
         self.chiudi_riproduzione(false);
         if let Some(m) = self.mqtt.take() {
             m.ferma();
+        }
+        self.mcp.ferma();
+    }
+
+    // ---- MCP -----------------------------------------------------------
+
+    /// Avvia, riavvia o ferma il server MCP e ne comunica lo stato.
+    fn configura_mcp(&mut self, config: McpConfig) {
+        let info = self.mcp.configura(&config);
+        self.invia(Evento::Mcp(info));
+    }
+
+    /// Comunica all'interfaccia i cambiamenti di stato del server MCP.
+    fn passo_mcp(&mut self) {
+        if let Some(info) = self.mcp.stato_cambiato() {
+            self.invia(Evento::Mcp(info));
         }
     }
 
@@ -613,6 +651,7 @@ impl Worker {
                     let attivo = !piano.vuoto();
                     l.piano = attivo.then_some(piano);
                     l.elm.traccia = !attivo;
+                    self.mcp.archivio().chiavi_lettura(&chiavi, &prioritarie);
                     self.invia(Evento::Polling(attivo));
                 }
             }
@@ -630,6 +669,7 @@ impl Worker {
             Comando::AvviaRegistrazione => self.avvia_registrazione(),
             Comando::FermaRegistrazione => self.ferma_registrazione(),
             Comando::ConfiguraMqtt(config) => self.configura_mqtt(config),
+            Comando::ConfiguraMcp(config) => self.configura_mcp(config),
             Comando::Riproduzione(c) => self.comando_riproduzione(c),
             Comando::Marcatore(_) if self.riproduzione.is_some() => self.rifiuta(
                 "Durante la riproduzione non si aggiungono marcatori: si vedono quelli già \

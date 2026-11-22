@@ -28,6 +28,7 @@ pub mod dati;
 mod grafici;
 mod icone;
 mod impostazioni;
+mod impostazioni_mcp;
 mod navigazione;
 mod pagine;
 pub(crate) mod scelta_file;
@@ -166,6 +167,8 @@ pub struct App {
     pub(crate) cruscotto: cruscotto::StatoCruscotto,
     // Impostazioni (MQTT)
     pub(crate) impostazioni: impostazioni::Impostazioni,
+    // Impostazioni (server MCP per assistenti AI)
+    pub(crate) mcp: impostazioni_mcp::StatoMcpUi,
 
     #[cfg(feature = "collaudo")]
     collaudo: Option<collaudo::Collaudo>,
@@ -200,6 +203,10 @@ impl App {
         let impostazioni = impostazioni::Impostazioni::carica();
         if impostazioni.form.attivo {
             let _ = tx.send(Comando::ConfiguraMqtt(impostazioni.form.clone()));
+        }
+        let mcp = impostazioni_mcp::StatoMcpUi::carica();
+        if mcp.config.attivo {
+            let _ = tx.send(Comando::ConfiguraMcp(mcp.config.clone()));
         }
         App {
             tx,
@@ -249,6 +256,7 @@ impl App {
             trascina_posizione: None,
             cruscotto: cruscotto::StatoCruscotto::carica(),
             impostazioni,
+            mcp,
             #[cfg(feature = "collaudo")]
             collaudo: collaudo::Collaudo::da_ambiente(),
         }
@@ -416,6 +424,7 @@ impl App {
                     self.errore = Some(e);
                 }
                 Evento::Mqtt(info) => self.impostazioni.info = info,
+                Evento::Mcp(info) => self.mcp.info = info,
                 Evento::Registro(righe) => {
                     self.registro.extend(righe);
                     if self.registro.len() > 600 {

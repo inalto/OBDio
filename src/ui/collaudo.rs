@@ -15,6 +15,7 @@ use super::cruscotto::modello::{Cella, Pagina, SPIA_MIL, Soglia, Strumento, Tipo
 use super::sessioni::AzioneSessioni;
 use super::{App, PannelloSensori, Scheda, VistaSensori};
 use crate::elm::ConfermaCancellazione;
+use crate::mcp::{Livello, McpConfig, StatoMcp, StatoMcpInfo};
 use crate::obd::pids;
 use crate::recording;
 use crate::scambio::FormatoEsportazione;
@@ -69,6 +70,28 @@ fn pagina_prova(primo_id: u64) -> Pagina {
         nome: "Prova strumenti".into(),
         strumenti,
     }
+}
+
+/// Scheda del server MCP come appare da acceso, con valori d'esempio: nulla
+/// viene salvato e nessuna porta viene aperta.
+fn esempio_mcp(app: &mut App) {
+    let m = &mut app.mcp;
+    m.config = McpConfig {
+        attivo: true,
+        porta: 8765,
+        token: "5e1f0c9a7b3d42e86a90d4c1f7b25e03c8a6149d2f7e0b53a1c4d98e6f207b3d".into(),
+        livello: Livello::SolaLettura,
+    };
+    m.porta = 8765;
+    m.mostra_token = false;
+    m.messaggio = None;
+    m.info = StatoMcpInfo {
+        stato: StatoMcp::InAscolto(8765),
+        richieste: 128,
+        rifiutate: 1,
+        ultimo_client: Some("claude-code 2.1.0".into()),
+        ultimo_errore: None,
+    };
 }
 
 fn sonda_a_valle_muta(app: &App) -> bool {
@@ -443,6 +466,8 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             f.password = "esempio".into();
             f.veicolo = "Fiat Panda".into();
             f.discovery_home_assistant = true;
+            // La scheda del server MCP sta in cima: si scorre fino a MQTT.
+            app.mcp.oltre_la_scheda = true;
             app.scheda = Scheda::Impostazioni;
             c.avanti();
         }
@@ -534,7 +559,42 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             app.invia(Comando::Scollega);
             c.avanti();
         }
+        // Scheda del server MCP accesa, con valori d'esempio e token mascherato.
         60 if !app.collegato() && c.secondi() > 0.5 => {
+            esempio_mcp(app);
+            app.mcp.oltre_la_scheda = false;
+            app.scheda = Scheda::Impostazioni;
+            app.mcp.scorri = Some(0.0);
+            c.avanti();
+        }
+        61 if c.secondi() > 0.6 => c.doppio("mcp"),
+        // Il resto della scheda: configurazione del client e spiegazione.
+        62 => {
+            app.mcp.scorri = Some((app.mcp.altezza - 640.0).max(0.0));
+            c.coda.extend([
+                Azione::Attendi(0.6),
+                Azione::Scatta("largo_mcp_in_fondo".into()),
+                Azione::Misura(STRETTO),
+                Azione::Attendi(1.2),
+            ]);
+        }
+        63 => {
+            app.mcp.scorri = Some(app.mcp.altezza * 0.34);
+            c.coda.extend([
+                Azione::Attendi(0.8),
+                Azione::Scatta("stretto_mcp_al_centro".into()),
+            ]);
+        }
+        64 => {
+            app.mcp.scorri = Some((app.mcp.altezza - 620.0).max(0.0));
+            c.coda.extend([
+                Azione::Attendi(0.8),
+                Azione::Scatta("stretto_mcp_in_fondo".into()),
+                Azione::Misura(LARGO),
+                Azione::Attendi(1.0),
+            ]);
+        }
+        65 => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             c.avanti();
         }

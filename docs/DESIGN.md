@@ -75,7 +75,7 @@ Sei destinazioni, sempre le stesse:
 | **Cruscotto** | Pagine di strumenti personalizzabili |
 | **Sensori** | Elenco di tutti i parametri supportati, valori dal vivo, un grafico per sensore |
 | **Sessioni** | Registrazioni salvate, importazione, esportazione |
-| **Impostazioni** | MQTT, unità, cartelle, informazioni |
+| **Impostazioni** | Server MCP per assistenti AI, MQTT, unità, cartelle, informazioni |
 
 Layout adattivo in base alla larghezza disponibile:
 
@@ -85,7 +85,7 @@ Layout adattivo in base alla larghezza disponibile:
   breve; contenuto a colonna singola; ispettori come foglio dal basso.
 
 Una **barra di stato** in alto è sempre visibile: stato del collegamento,
-registrazione in corso con durata, pubblicazione MQTT, e la fascia arancione
+registrazione in corso con durata, pubblicazione MQTT, server MCP, e la fascia arancione
 quando i dati non vengono da un veicolo (demo o riproduzione).
 
 Nota di implementazione (fase 6), dove il risultato precisa o si scosta da
@@ -133,6 +133,19 @@ quanto sopra:
 - `tema::riserva_superiore()` restituisce lo spazio da lasciare in cima per
   la barra di stato di Android: oggi 0, perché winit non comunica gli
   «insets» dell'area sicura.
+
+Nota di implementazione (server MCP): la scheda *Server MCP per assistenti AI*
+è la prima delle Impostazioni e usa l'unico **interruttore a levetta**
+dell'app (`src/ui/impostazioni_mcp.rs`): pista di 48 × 26 px in `accento` da
+acceso e in `superficie_alta` da spento, con l'etichetta accanto che dice lo
+stato a parole («Server MCP attivo» / «Server MCP spento») e, sotto, la riga
+di stato con il pallino. Levetta ed etichetta sono un solo bersaglio, alto
+quanto il bersaglio minimo del layout. A differenza del modulo MQTT, qui ogni
+scelta vale subito. Indirizzi, token e frammenti da copiare stanno in riquadri
+a larghezza fissa su `sfondo`; il token è mascherato finché non si preme
+*Mostra*. Nella barra di stato «MCP» compare solo a server acceso (o non
+avviato per un errore) e porta alle Impostazioni: non è un interruttore, per
+non aprire o chiudere una porta con un clic distratto.
 
 ## 3. Strumenti del cruscotto
 

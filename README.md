@@ -32,7 +32,7 @@ in [docs/NOVITA.md](docs/NOVITA.md).
 - [Importare ed esportare le sessioni](#importare-ed-esportare-le-sessioni)
 - [Rivivere una sessione (riproduzione)](#rivivere-una-sessione-riproduzione)
 - [Cosa mostra la diagnosi](#cosa-mostra-la-diagnosi), [Cancellare i codici guasto](#cancellare-i-codici-guasto)
-- [MQTT](#mqtt), [Android](#android)
+- [MQTT](#mqtt), [Server MCP per assistenti AI](#server-mcp-per-assistenti-ai), [Android](#android)
 - [Stato delle verifiche](#stato-delle-verifiche), [Controlli da fare sull'auto](#controlli-da-fare-sullauto)
 - [Limiti noti](#limiti-noti), [Comandi inviati](#comandi-inviati), [Compilare dai sorgenti](#compilare-dai-sorgenti)
 
@@ -522,6 +522,32 @@ pubblicazione non rallenta mai la lettura. Il VIN non viene mai pubblicato e la
 connessione **non è cifrata** (TLS non è supportato in questa versione).
 Argomenti, esempi, discovery e note di sicurezza: [docs/MQTT.md](docs/MQTT.md).
 
+## Server MCP per assistenti AI
+
+![Scheda del server MCP nelle Impostazioni](docs/schermate/mcp.png)
+
+Un assistente AI che parla il protocollo MCP (per esempio Claude Code) può
+collegarsi a OBDio mentre è aperta e leggere stato, sensori, diagnosi e
+sessioni registrate, per aiutarti a interpretarli. Si accende con
+l'interruttore in cima alla scheda **Impostazioni**, che mostra anche
+indirizzo, token e la configurazione da copiare nel client.
+
+- **Spento** finché non lo accendi; ascolta solo su `127.0.0.1`
+  (`http://127.0.0.1:8765/mcp`) e ogni richiesta deve portare un token.
+- Due livelli: **Sola lettura** (predefinito) e **Lettura e azioni** (avviare
+  e fermare lettura e registrazione, marcatori, rilettura della diagnosi).
+- Ogni risposta dice se i dati vengono dal veicolo, dalla demo o da una
+  riproduzione; un valore assente è `null`, mai zero. Il VIN non esce mai.
+- I **codici guasto non si possono cancellare** attraverso il server, in
+  nessun caso.
+
+Strumenti, esempi, modello di sicurezza con i suoi limiti e problemi comuni:
+[docs/MCP.md](docs/MCP.md).
+
+> **Verifica.** Provato con test automatici attraverso HTTP vero e, a mano,
+> con `curl` e con `fetch` di Node.js. **Nessun assistente AI reale è stato
+> collegato.**
+
 ## Stato delle verifiche
 
 ### Adattatori Carista: cosa è documentato
@@ -558,7 +584,7 @@ non è verificabile: è un'ipotesi, non un dato.
 
 | Verifica | Esito |
 |---|---|
-| Test automatici (188: 168 unitari e 20 di integrazione in `tests/`): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
+| Test automatici (233: 206 unitari e 27 di integrazione in `tests/`): decoder con DTC multipli, fermo immagine assente o con DTC diverso, PID non supportati, risposte da più ECU, frammentazione dei dati, eco, NO DATA, timeout, perdita del collegamento, CSV, riapertura, cancellazione dei codici (accettata, rifiutata, senza risposta, caduta) | Superati |
 | Flusso demo attraverso il thread di lavoro reale: collegamento, P0420, fermo immagine, polling con priorità alle sonde, registrazione, CSV, riapertura | Superato |
 | Distanza parziale attraverso il thread di lavoro reale: campioni monotoni in km, registrati nella sessione e nel CSV | Superato |
 | Cancellazione dei codici in demo attraverso il thread di lavoro reale: copia della diagnosi, servizio 04, rilettura con P0420 solo permanente, MIL spenta, prontezza azzerata | Superato |
@@ -566,6 +592,10 @@ non è verificabile: è un'ipotesi, non un dato.
 | Cancellazione dei codici su un veicolo reale | **Non provata** |
 | Conversazione MQTT reale fra il thread di lavoro (con la demo) e un broker di prova nello stesso processo (sette test): ultima volontà e credenziali nel CONNECT, stato in linea trattenuto, sensori numerici, istantanea con `null` per i valori assenti, diagnosi senza VIN, discovery, QoS 1, broker che cade e torna, chiusura con broker muto | Superato |
 | Pubblicazione MQTT verso un broker vero (Mosquitto o altro) e discovery riconosciuta da Home Assistant | **Non provate** |
+| Server MCP attraverso HTTP vero fra il thread di lavoro (con la demo) e un client di prova scritto nei test (sette test): stretta di mano `initialize`, elenco e chiamata degli strumenti, revisione 2026-07-28 senza stato, origine «demo» e «riproduzione» sempre dichiarata, valori numerici, lettura fallita come `null`, P0420 senza VIN, azioni rifiutate in sola lettura, nessuno strumento che cancelli i codici, `401` senza token, `403` con `Origin` o `Host` estranei, corpo e testata troppo grandi, porta occupata, quaranta richieste insieme, spegnimento e uscita senza blocchi | Superato |
+| Server MCP con client HTTP indipendenti, a mano: `curl` (anche con `Expect: 100-continue`) e `fetch` di Node.js 24 (stretta di mano, strumenti, sessanta richieste insieme) contro il server dimostrativo | Superato |
+| Server MCP con un assistente AI reale (Claude Code, Claude Desktop o altri client MCP) | **Non provato**: nessun client MCP disponibile sulla macchina di sviluppo. Il comando `claude mcp add --transport http …` è preso dalla documentazione, non eseguito |
+| Scheda del server MCP nell'interfaccia | Schermate dal collaudo automatico, larghe e strette, con valori d'esempio (server non avviato dal collaudo); interruttore, «Copia», «Rigenera» e cambio di porta premuti a mano **non provati** |
 | Interfaccia in demo, con schermate di **ogni pagina a 1280 × 820 e a 390 × 844** (layout da telefono): connessione, diagnosi, fermo immagine, grafici con buco del dato e marcatori, pagina Sensori (elenco, confronto, un grafico per sensore con diciassette sensori), sessioni (elenco e dettaglio), impostazioni, finestra di scelta del file, conferma ed esito della cancellazione, chiusura con il cruscotto non salvato | Superato |
 | Cruscotto in demo, con schermate larghe e strette: «Guida» in movimento, «Diagnosi P0420» con l'interruzione della sonda a valle, modo Modifica con ispettore, una pagina con i sette tipi (parametro non supportato, risposta mancante), lettura avviata e fermata dal cruscotto | Superato; trascinamenti e ridimensionamenti col mouse **non provati** dal collaudo automatico |
 | Uso col dito su un telefono vero, tastiera Ctrl+1…6 premuta a mano | **Non provati**: il layout stretto è verificato solo restringendo la finestra su Windows |
@@ -674,6 +704,7 @@ Struttura:
 | `diagnosis.rs` | Lettura di DTC, MIL, prontezza, fermo immagine, Mode 06 |
 | `recording.rs` | Sessioni su disco e CSV |
 | `mqtt.rs` | Pubblicazione MQTT: argomenti, limitazione di frequenza, coda non bloccante, discovery |
+| `mcp/` | Server MCP locale per assistenti AI: archivio condiviso, strumenti, protocollo, trasporto HTTP |
 | `worker.rs` | Thread di lavoro con stati espliciti: scansione, connessione, diagnosi, cancellazione, polling, registrazione, disconnessione |
 | `ui/` | Interfaccia egui: non esegue mai I/O verso l'adattatore |
 | `ui/tema.rs` | Token visivi (colori, spaziature, raggi, caratteri) applicati a egui |

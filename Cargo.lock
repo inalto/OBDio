@@ -1640,6 +1640,7 @@ dependencies = [
  "eframe",
  "egui_plot",
  "futures",
+ "getrandom",
  "log",
  "png",
  "rumqttc",

@@ -68,3 +68,16 @@ nel README, in [Stato delle verifiche](../README.md#stato-delle-verifiche).
   i sistemi.
 - Non è stato costruito alcun APK e il codice Android non è mai stato
   compilato: vedi [ANDROID.md](ANDROID.md).
+
+## Server MCP per assistenti AI
+
+- Un assistente AI che parla il protocollo MCP (per esempio Claude Code) può
+  collegarsi all'app aperta, su `http://127.0.0.1:8765/mcp`, e leggere stato,
+  sensori con la loro storia recente, diagnosi e sessioni registrate.
+- Interruttore in cima alle **Impostazioni**; spento finché non lo si
+  accende. Indicatore «MCP» nella barra di stato.
+- Solo su questo computer, con un token casuale per ogni richiesta; due
+  livelli, **Sola lettura** e **Lettura e azioni**.
+- Ogni risposta dichiara l'origine dei dati (veicolo, demo, riproduzione); il
+  VIN non esce mai e i codici guasto non si possono cancellare da qui.
+- Non è stato provato con un assistente AI reale: vedi [MCP.md](MCP.md).

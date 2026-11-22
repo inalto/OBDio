@@ -246,7 +246,7 @@ impl App {
     // ------------------------------------------------------------------
 
     /// Barra in alto: titolo della pagina, stato del collegamento,
-    /// registrazione, MQTT; sotto, le fasce di demo, riproduzione ed errore.
+    /// registrazione, MQTT, server MCP; sotto, le fasce di demo, riproduzione ed errore.
     pub(crate) fn barra_superiore(&mut self, ui: &mut egui::Ui) {
         let stretto = self.disposizione.stretta();
         ui.add_space(tema::riserva_superiore());
@@ -264,6 +264,7 @@ impl App {
                 .heading()
                 .color(tema::TESTO),
         );
+        let mut apri_impostazioni = false;
         riga.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = tema::SP_1;
             let (lungo, breve, colore) = self.stato_collegamento();
@@ -295,7 +296,29 @@ impl App {
                 ui.label(RichText::new(testo).color(tema::TESTO_2));
                 icone::pallino(ui, colore);
             }
+            // Server MCP: come MQTT, solo se acceso e se resta posto. Un clic
+            // porta alle Impostazioni, dove sta l'interruttore.
+            if let Some((testo, colore)) = self.mcp.testo_barra()
+                && (!stretto || ui.available_width() > 220.0)
+            {
+                ui.add_space(tema::SP_3);
+                let testo = if stretto { "MCP".to_string() } else { testo };
+                let etichetta = egui::Label::new(RichText::new(testo).color(tema::TESTO_2))
+                    .sense(Sense::click());
+                if ui
+                    .add(etichetta)
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("Server MCP per assistenti AI: apri le Impostazioni")
+                    .clicked()
+                {
+                    apri_impostazioni = true;
+                }
+                icone::pallino(ui, colore);
+            }
         });
+        if apri_impostazioni {
+            self.scheda = Scheda::Impostazioni;
+        }
         self.fasce(ui);
     }
 

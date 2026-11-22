@@ -10,12 +10,14 @@
 //! - [`scambio`]: importazione ed esportazione (CSV OBDio, CSV in stile Torque, JSON);
 //! - [`riproduzione`]: riproduzione in tempo reale di una sessione registrata;
 //! - [`mqtt`]: pubblicazione in tempo reale su un broker MQTT;
+//! - [`mcp`]: server MCP locale per assistenti AI (spento finché non lo si attiva);
 //! - [`worker`]: thread di lavoro con stati espliciti;
 //! - [`ui`]: interfaccia egui.
 
 pub mod config;
 pub mod diagnosis;
 pub mod elm;
+pub mod mcp;
 pub mod model;
 pub mod mqtt;
 pub mod obd;

@@ -26,6 +26,8 @@ serde_json = "1"
 chrono = "0.4"
 uuid = "1"
 rumqttc = { version = "0.25", default-features = false }
+# Solo per il token del server MCP: numeri casuali dal sistema operativo.
+getrandom = "0.4"
 png = { version = "0.18", optional = true }
 
 # Porte seriali: su Android non si possono elencare (vedi docs/ANDROID.md).
