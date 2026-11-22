@@ -1,9 +1,11 @@
 [package]
 name = "obdio"
-version = "0.3.0"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.93"
 description = "Lettore diagnostico OBD-II/EOBD per adattatori ELM327 (Carista) su Windows; in lettura, salvo la cancellazione confermata dei codici guasto"
+license = "MIT"
+repository = "https://github.com/inalto/OBDio"
 publish = false
 
 [lib]

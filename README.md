@@ -14,7 +14,11 @@ esplicitamente: vedi [Cancellare i codici guasto](#cancellare-i-codici-guasto).
 Non scrive sulle centraline, non esegue codifiche né test attuatori e non
 permette di inviare comandi liberi.
 
-Versione 0.3.0. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
+**Scarica**: l'ultima versione è nella pagina dei
+[rilasci su GitHub](https://github.com/inalto/OBDio/releases/latest)
+(file `OBDio-<versione>-windows-x64.zip`). Licenza: [MIT](LICENSE).
+
+Versione 1.0.0. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
 con codice P0420. Le novità rispetto alla prima versione, fase per fase, sono
 in [docs/NOVITA.md](docs/NOVITA.md).
 

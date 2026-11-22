@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "obdio"
-version = "0.3.0"
+version = "1.0.0"
 dependencies = [
  "android-activity",
  "android_logger",

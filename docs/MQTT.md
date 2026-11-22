@@ -24,7 +24,7 @@ Le chiavi dei sensori sono quelle del catalogo (`giri`, `velocita`,
 ### Stato
 
 ```json
-{"stato":"online","origine":"demo_sintetico","app":"OBDio","versione":"0.3.0"}
+{"stato":"online","origine":"demo_sintetico","app":"OBDio","versione":"1.0.0"}
 ```
 
 - `origine` è `veicolo` per un adattatore reale, `demo_sintetico` per il
@@ -102,7 +102,7 @@ configurazione trattenuta su
   "payload_available": "online",
   "payload_not_available": "offline",
   "device": {"identifiers": ["obdio_auto"], "name": "OBDio auto",
-             "manufacturer": "OBDio", "sw_version": "0.3.0"}
+             "manufacturer": "OBDio", "sw_version": "1.0.0"}
 }
 ```
 
