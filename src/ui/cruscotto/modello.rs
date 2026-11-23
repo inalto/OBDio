@@ -368,6 +368,12 @@ pub fn scala_predefinita(chiave: &str) -> Scala {
         "consumo_istantaneo" => Scala::semplice(0.0, 30.0),
         "tempo_motore" => Scala::semplice(0.0, 3600.0),
         pids::CHIAVE_DISTANZA_PARZIALE => Scala::semplice(0.0, 1000.0),
+        "td5_temp_gasolio" => Scala::semplice(-20.0, 120.0),
+        "td5_alimentazione_sensori" => Scala::semplice(0.0, 6.0),
+        k if k.starts_with("td5_pedale") => Scala::semplice(0.0, 5.0),
+        k if k.starts_with("td5_iniettore") => Scala::semplice(-50.0, 50.0),
+        "td5_egr" | "td5_wastegate" => Scala::semplice(0.0, 100.0),
+        k if k.starts_with("td5_") => Scala::semplice(0.0, 1.0),
         _ => match pids::per_key(chiave).map(|p| p.kind) {
             Some(k) => scala_da_kind(k),
             None => Scala::semplice(0.0, 100.0),
@@ -402,7 +408,7 @@ fn scala_da_kind(k: Kind) -> Scala {
         PressioneRail => Scala::semplice(0.0, 100_000.0),
         ConsumoOrario => Scala::semplice(0.0, 30.0),
         Contatore32 => Scala::semplice(0.0, 1_000_000.0),
-        Calcolato | Libero => Scala::semplice(0.0, 100.0),
+        Calcolato | Libero | Td5 => Scala::semplice(0.0, 100.0),
     }
 }
 

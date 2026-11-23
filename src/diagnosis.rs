@@ -142,6 +142,10 @@ pub struct DiagnosisReport {
     /// Mai scritto nei file: resta solo in memoria.
     #[serde(skip)]
     pub vin: Option<String>,
+    /// Solo per la centralina Land Rover Td5: i suoi codici guasto sono in
+    /// `dtc`, qui il resto (vedi [`crate::td5`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub td5: Option<crate::td5::DiagnosiTd5>,
 }
 
 /// Dati del collegamento necessari alla lettura.

@@ -18,8 +18,13 @@ use crate::obd::ObdRequest;
 use crate::obd::frames::BusKind;
 use crate::obd::pids::{self, Decodifica};
 use crate::recording::{self, Intestazione, Recorder, SessionData};
+use crate::registri::Diario;
 use crate::riproduzione::{self, Riproduttore};
 pub use crate::riproduzione::{ComandoRiproduzione, StatoRiproduzione};
+use crate::td5::decodifica as td5_decodifica;
+use crate::td5::richieste::IdLocale;
+use crate::td5::simulato::SimulatoreTd5;
+use crate::td5::{CanaleTd5, ErroreTd5, SessioneTd5, Stn};
 use crate::transport::Transport;
 use crate::transport::ble::{BleDispositivo, BleErrore, BleManager, GattInfo};
 use crate::transport::demo::DemoTransport;
@@ -36,6 +41,12 @@ pub enum Sorgente {
     Demo,
     /// Trasporto già pronto (verifiche automatiche).
     Trasporto(Box<dyn Transport>),
+    /// Centralina Land Rover Td5 (sola lettura) attraverso la sorgente
+    /// indicata: un OBDLink CX via BLE, un OBDLink LX via porta seriale, un
+    /// trasporto delle verifiche. Vedi [`crate::td5`].
+    Td5(Box<Sorgente>),
+    /// Simulatore OBDLink + Td5 con dati sintetici («Demo Td5»).
+    DemoTd5,
     /// Sessione registrata da «rivivere»: i suoi campioni scorrono nel tempo
     /// e arrivano come quelli dal vivo (vedi [`crate::riproduzione`]).
     Riproduzione(Box<SessionData>),
@@ -108,6 +119,11 @@ pub enum ErroreUtente {
     ErroreInterno(String),
     /// Il thread di lavoro si è fermato del tutto (visto dall'interfaccia).
     LavoroFermo,
+    /// Modalità Td5: l'adattatore non ha un chip STN (non è un OBDLink).
+    AdattatoreNonAdattoTd5(String),
+    /// Modalità Td5: l'adattatore risponde ma la centralina non ha aperto la
+    /// sessione o ha rifiutato l'accesso.
+    CentralinaTd5(String),
     Altro(String),
 }
 
@@ -127,6 +143,8 @@ impl ErroreUtente {
             ErroreUtente::AccessoBleNegato(_) => "L'adattatore rifiuta l'accesso Bluetooth",
             ErroreUtente::ErroreInterno(_) => "Errore interno",
             ErroreUtente::LavoroFermo => "Errore interno",
+            ErroreUtente::AdattatoreNonAdattoTd5(_) => "Questo adattatore non legge il Td5",
+            ErroreUtente::CentralinaTd5(_) => "La centralina Td5 non ha aperto la sessione",
             ErroreUtente::Altro(_) => "Errore",
         }
     }
@@ -183,6 +201,20 @@ impl ErroreUtente {
             ErroreUtente::CancellazioneNonEseguita(d) => {
                 format!("Nessuna richiesta di cancellazione è stata inviata alla centralina. {d}")
             }
+            ErroreUtente::AdattatoreNonAdattoTd5(d) => format!(
+                "La modalità Land Rover Td5 richiede un adattatore OBDLink CX (Bluetooth LE) o LX \
+                 (Bluetooth classico, porta COM). Gli adattatori di tipo ELM327, come il \
+                 Carista, aggiungono sempre un'intestazione ai messaggi e non possono parlare \
+                 con questa centralina. Per gli altri veicoli scegli «OBD-II standard». \
+                 Dettaglio: {d}"
+            ),
+            ErroreUtente::CentralinaTd5(d) => format!(
+                "L'adattatore OBDLink risponde, ma la centralina Td5 non ha aperto la sessione \
+                 diagnostica. Porta il quadro su ON e riprova. La modalità Td5 non è ancora \
+                 stata provata su un veicolo: ogni comando e ogni risposta sono nel registro \
+                 dei collegamenti (Impostazioni > Registri), utile per capire che cosa non va. \
+                 Dettaglio: {d}"
+            ),
             ErroreUtente::Registrazione(d)
             | ErroreUtente::Riproduzione(d)
             | ErroreUtente::Altro(d) => d.clone(),
@@ -215,6 +247,9 @@ pub struct InfoConn {
     pub gatt: Option<GattInfo>,
     /// Avvisi sull'interpretazione dei dati (per esempio scale non standard).
     pub avvisi: Vec<String>,
+    /// Vero se il collegamento è con una centralina Land Rover Td5 (i
+    /// parametri sono quelli del Td5, i codici guasto non si cancellano).
+    pub td5: bool,
 }
 
 /// Sessione in riproduzione.
@@ -332,6 +367,36 @@ impl Piano {
         }
     }
 
+    /// Piano per la centralina Td5: i «PID» sono i codici degli
+    /// identificativi locali ([`IdLocale`]) che producono le chiavi chieste,
+    /// limitati a quelle che la centralina ha fornito al collegamento.
+    pub fn td5(chiavi: &[String], prioritarie: &[String], supportati: &BTreeSet<u8>) -> Self {
+        let id_di = |k: &String| {
+            let fornito = pids::per_key(k).is_some_and(|p| supportati.contains(&p.pid));
+            td5_decodifica::id_di(k)
+                .filter(|_| fornito)
+                .map(IdLocale::codice)
+        };
+        let mut veloci: Vec<u8> = Vec::new();
+        for c in prioritarie.iter().filter_map(id_di) {
+            if !veloci.contains(&c) {
+                veloci.push(c);
+            }
+        }
+        let mut lenti: Vec<u8> = Vec::new();
+        for c in chiavi.iter().filter_map(id_di) {
+            if !veloci.contains(&c) && !lenti.contains(&c) {
+                lenti.push(c);
+            }
+        }
+        Piano {
+            veloci,
+            lenti,
+            passo: 0,
+            i_lento: 0,
+        }
+    }
+
     pub fn vuoto(&self) -> bool {
         self.veloci.is_empty() && self.lenti.is_empty()
     }
@@ -389,8 +454,46 @@ impl IntegratoreDistanza {
     }
 }
 
+/// Con che cosa parla il collegamento.
+enum Dialogo {
+    /// Adattatore ELM327 e centraline OBD-II.
+    Obd(Elm),
+    /// OBDLink e centralina Land Rover Td5 (sola lettura).
+    Td5(Box<SessioneTd5>),
+}
+
+impl Dialogo {
+    fn chiudi(&mut self) {
+        match self {
+            Dialogo::Obd(e) => e.chiudi(),
+            Dialogo::Td5(s) => s.chiudi(),
+        }
+    }
+
+    fn traccia(&self) -> bool {
+        match self {
+            Dialogo::Obd(e) => e.traccia,
+            Dialogo::Td5(s) => s.traccia(),
+        }
+    }
+
+    fn imposta_traccia(&mut self, attiva: bool) {
+        match self {
+            Dialogo::Obd(e) => e.traccia = attiva,
+            Dialogo::Td5(s) => s.canale().imposta_traccia(attiva),
+        }
+    }
+
+    fn prendi_registro(&mut self) -> Vec<String> {
+        match self {
+            Dialogo::Obd(e) => e.prendi_registro(),
+            Dialogo::Td5(s) => s.canale().prendi_registro(),
+        }
+    }
+}
+
 struct Link {
-    elm: Elm,
+    dialogo: Dialogo,
     info: InfoConn,
     kind: BusKind,
     t0: Instant,
@@ -404,12 +507,20 @@ struct Link {
 
 /// Esegue la lettura diagnostica completa sul collegamento.
 fn leggi_su(l: &mut Link) -> Result<DiagnosisReport, crate::transport::Scollegato> {
-    let ctx = Contesto {
-        adattatore: &l.info.adattatore,
-        protocollo: &l.info.protocollo,
-        supportati: &l.info.supportati,
-    };
-    diagnosis::leggi(&mut l.elm, &ctx)
+    match &mut l.dialogo {
+        Dialogo::Obd(elm) => {
+            let ctx = Contesto {
+                adattatore: &l.info.adattatore,
+                protocollo: &l.info.protocollo,
+                supportati: &l.info.supportati,
+            };
+            diagnosis::leggi(elm, &ctx)
+        }
+        // Gli errori non fatali sono già diventati stati delle letture.
+        Dialogo::Td5(s) => s
+            .diagnosi(&l.info.adattatore, &l.info.protocollo)
+            .map_err(|e| crate::transport::Scollegato(e.to_string())),
+    }
 }
 
 /// Come si è conclusa la sequenza di cancellazione.
@@ -423,6 +534,9 @@ enum FineCancellazione {
     Caduta(String),
 }
 
+/// Nome della centralina nei campioni e nelle diagnosi del Td5.
+const TD5_ECU: &str = "Td5";
+
 /// Errori consecutivi di comunicazione oltre i quali il collegamento è dato per perso.
 const MAX_ERRORI_DI_FILA: u32 = 5;
 const DURATA_SCANSIONE: Duration = Duration::from_secs(40);
@@ -433,6 +547,19 @@ const INTERVALLO_STATO_RIPRODUZIONE: Duration = Duration::from_millis(250);
 /// Attesa a riposo con il server MCP acceso: entro questo tempo parte
 /// un'azione chiesta da un assistente.
 const ATTESA_CON_MCP: Duration = Duration::from_millis(40);
+
+/// Separa la modalità Td5 dalla sorgente: `(sorgente fisica, td5)`. La demo
+/// in modalità Td5 è il simulatore OBDLink + Td5.
+fn scomponi_td5(s: Sorgente) -> (Sorgente, bool) {
+    match s {
+        Sorgente::DemoTd5 => (Sorgente::Trasporto(Box::new(SimulatoreTd5::demo())), true),
+        Sorgente::Td5(dentro) => match *dentro {
+            Sorgente::Demo => scomponi_td5(Sorgente::DemoTd5),
+            altra => (scomponi_td5(altra).0, true),
+        },
+        altra => (altra, false),
+    }
+}
 
 /// Esegue `f` ignorando un suo eventuale panic (usata solo per rimettere in
 /// ordine dopo un altro panic).
@@ -572,6 +699,10 @@ impl Worker {
             }
             self.protetto("la scansione Bluetooth", Self::passo_scansione);
             self.protetto("la lettura dei sensori", Self::passo_polling);
+            self.protetto(
+                "il mantenimento della sessione Td5",
+                Self::passo_mantenimento,
+            );
             self.protetto("la riproduzione della sessione", Self::passo_riproduzione);
             self.protetto("la pubblicazione MQTT", Self::passo_mqtt);
             self.protetto("il server MCP", Self::passo_mcp);
@@ -632,7 +763,7 @@ impl Worker {
                 // Chiusura non riuscita sopra: almeno il flush del buffer.
                 senza_panic(|| drop(r.chiudi()));
             }
-            senza_panic(|| l.elm.chiudi());
+            senza_panic(|| l.dialogo.chiudi());
             senza_panic(|| drop(l));
         }
         // 3. Riproduzione e scansione.
@@ -780,10 +911,13 @@ impl Worker {
                 prioritarie,
             } => {
                 if let Some(l) = self.link.as_mut() {
-                    let piano = Piano::new(&chiavi, &prioritarie, &l.info.unione);
+                    let piano = match l.dialogo {
+                        Dialogo::Obd(_) => Piano::new(&chiavi, &prioritarie, &l.info.unione),
+                        Dialogo::Td5(_) => Piano::td5(&chiavi, &prioritarie, &l.info.unione),
+                    };
                     let attivo = !piano.vuoto();
                     l.piano = attivo.then_some(piano);
-                    l.elm.traccia = !attivo;
+                    l.dialogo.imposta_traccia(!attivo);
                     self.mcp.archivio().chiavi_lettura(&chiavi, &prioritarie);
                     self.invia(Evento::Polling(attivo));
                 }
@@ -791,7 +925,7 @@ impl Worker {
             Comando::FermaPolling => {
                 if let Some(l) = self.link.as_mut() {
                     l.piano = None;
-                    l.elm.traccia = true;
+                    l.dialogo.imposta_traccia(true);
                     self.invia(Evento::Polling(false));
                 }
             }
@@ -941,6 +1075,8 @@ impl Worker {
             return;
         }
         self.ferma_scansione();
+        // Modalità Td5: la sorgente dice solo come raggiungere l'adattatore.
+        let (sorgente, td5) = scomponi_td5(sorgente);
         let sorgente = match sorgente {
             Sorgente::Riproduzione(s) => return self.collega_riproduzione(*s),
             altra => altra,
@@ -965,7 +1101,9 @@ impl Worker {
         let trasporto: Box<dyn Transport> = match sorgente {
             Sorgente::Demo => Box::new(DemoTransport::new()),
             Sorgente::Trasporto(t) => t,
-            Sorgente::Riproduzione(_) => unreachable!("gestita sopra"),
+            Sorgente::Riproduzione(_) | Sorgente::Td5(_) | Sorgente::DemoTd5 => {
+                unreachable!("gestite sopra")
+            }
             Sorgente::Seriale { porta, baud } => match SerialTransport::apri(&porta, baud) {
                 Ok(t) => {
                     diario.passo(format!("Porta {porta} aperta"));
@@ -995,6 +1133,9 @@ impl Worker {
                 }
             }
         };
+        if td5 {
+            return self.collega_td5(trasporto, gatt, diario);
+        }
         let mut elm = Elm::new(trasporto);
         // Ogni scambio della sequenza iniziale va subito nel registro dei
         // collegamenti (la risposta al VIN è omessa come nel registro degli
@@ -1113,13 +1254,14 @@ impl Worker {
             unione,
             gatt,
             avvisi,
+            td5: false,
         };
         self.invia(Evento::Connesso(Box::new(info.clone())));
         if let Some(m) = &self.mqtt {
             m.collegato_origine(info.origine);
         }
         self.link = Some(Link {
-            elm,
+            dialogo: Dialogo::Obd(elm),
             info,
             kind: protocollo.kind,
             t0: Instant::now(),
@@ -1140,7 +1282,7 @@ impl Worker {
         }
         self.ferma_registrazione();
         if let Some(mut l) = self.link.take() {
-            l.elm.chiudi();
+            l.dialogo.chiudi();
         }
         if let Some(m) = &self.mqtt {
             m.scollegato();
@@ -1162,13 +1304,13 @@ impl Worker {
             return;
         };
         let _ = l.kind;
-        let traccia_prima = l.elm.traccia;
-        l.elm.traccia = true;
+        let traccia_prima = l.dialogo.traccia();
+        l.dialogo.imposta_traccia(true);
         let _ = self.tx.send(Evento::Stato(StatoConn::Diagnosi));
         (self.notifica)();
         let esito = leggi_su(l);
-        let registro = l.elm.prendi_registro();
-        l.elm.traccia = traccia_prima;
+        let registro = l.dialogo.prendi_registro();
+        l.dialogo.imposta_traccia(traccia_prima);
         match esito {
             Ok(report) => {
                 let mut errore = None;
@@ -1206,12 +1348,22 @@ impl Worker {
             )));
             return;
         };
+        if let Dialogo::Td5(_) = l.dialogo {
+            // Per scelta: con il Td5 OBDio legge soltanto. Il comando di
+            // cancellazione del Td5 non esiste nel codice.
+            self.link = Some(l);
+            self.invia(Evento::Errore(ErroreUtente::CancellazioneNonEseguita(
+                "Con la centralina Land Rover Td5 la cancellazione dei codici guasto non è                  disponibile: la modalità Td5 è di sola lettura, per scelta."
+                    .into(),
+            )));
+            return;
+        }
         self.stato(StatoConn::Cancellazione);
-        let traccia_prima = l.elm.traccia;
-        l.elm.traccia = true;
+        let traccia_prima = l.dialogo.traccia();
+        l.dialogo.imposta_traccia(true);
         let fine = self.sequenza_cancellazione(&mut l, conferma);
-        l.elm.traccia = traccia_prima;
-        let registro = l.elm.prendi_registro();
+        l.dialogo.imposta_traccia(traccia_prima);
+        let registro = l.dialogo.prendi_registro();
         self.link = Some(l);
         self.invia(Evento::Registro(registro));
         match fine {
@@ -1282,7 +1434,12 @@ impl Worker {
             copia: copia.clone(),
             eseguita_il: adesso_iso(),
         };
-        let esito = match l.elm.cancella_dtc(conferma) {
+        let Dialogo::Obd(elm) = &mut l.dialogo else {
+            return FineCancellazione::NonEseguita(
+                "Cancellazione non disponibile con questa centralina.".into(),
+            );
+        };
+        let esito = match elm.cancella_dtc(conferma) {
             Ok(e) => e,
             Err(s) => {
                 let r = risultato(EsitoCancellazione::ErroreComunicazione(format!(
@@ -1337,7 +1494,11 @@ impl Worker {
         let Some(pid) = l.piano.as_mut().and_then(|p| p.prossimo()) else {
             return;
         };
-        let esito = match l.elm.interroga(ObdRequest::CurrentData(pid)) {
+        let elm = match &mut l.dialogo {
+            Dialogo::Obd(elm) => elm,
+            Dialogo::Td5(_) => return self.passo_polling_td5(pid),
+        };
+        let esito = match elm.interroga(ObdRequest::CurrentData(pid)) {
             Ok(e) => e,
             Err(s) => {
                 self.chiudi_link(Some(s.0), true);
@@ -1390,6 +1551,68 @@ impl Worker {
                 }
             }
         }
+        self.consegna_campioni(campioni);
+    }
+
+    /// Un passo della lettura con la centralina Td5: `codice` è quello di un
+    /// identificativo locale ([`IdLocale`]).
+    fn passo_polling_td5(&mut self, codice: u8) {
+        let Some(l) = self.link.as_mut() else {
+            return;
+        };
+        let (Dialogo::Td5(s), Some(id)) = (&mut l.dialogo, IdLocale::da_codice(codice)) else {
+            return;
+        };
+        let esito = s.leggi(id);
+        let registro = s.canale().prendi_registro();
+        let valori = match esito {
+            Ok(v) => v,
+            Err(e) => {
+                self.invia(Evento::Registro(registro));
+                self.chiudi_link(Some(e.to_string()), true);
+                return;
+            }
+        };
+        let t = l.t0.elapsed().as_secs_f64();
+        let ts = adesso_iso();
+        // Solo i parametri che la centralina ha fornito al collegamento.
+        let campioni: Vec<Sample> = valori
+            .into_iter()
+            .filter_map(|v| {
+                let par = pids::per_key(v.chiave)?;
+                l.info.unione.contains(&par.pid).then(|| Sample {
+                    t,
+                    ts: ts.clone(),
+                    ecu: TD5_ECU.to_string(),
+                    key: par.key.clone(),
+                    pid: par.pid,
+                    valore: v.valore,
+                    unita: par.unita.to_string(),
+                    stato: v.stato,
+                })
+            })
+            .collect();
+        if !campioni.is_empty()
+            && campioni
+                .iter()
+                .all(|c| c.stato == Stato::ErroreComunicazione)
+        {
+            l.errori_di_fila += 1;
+        } else {
+            l.errori_di_fila = 0;
+        }
+        if !registro.is_empty() {
+            self.invia(Evento::Registro(registro));
+        }
+        self.consegna_campioni(campioni);
+    }
+
+    /// Distanza parziale, registrazione, MQTT e interfaccia per i campioni di
+    /// un passo di lettura; chiude il collegamento dopo troppi errori di fila.
+    fn consegna_campioni(&mut self, mut campioni: Vec<Sample>) {
+        let Some(l) = self.link.as_mut() else {
+            return;
+        };
         // Distanza parziale: dalla velocità della centralina principale, nello
         // stesso gruppo di campioni così viene registrata come ogni altro dato.
         let principale = l.info.ecu.first().cloned().unwrap_or_default();
@@ -1439,6 +1662,185 @@ impl Worker {
                 true,
             );
         }
+    }
+
+    /// Con la centralina Td5 e senza lettura in corso: TesterPresent dopo 1 s
+    /// di silenzio, altrimenti la centralina chiude la sessione dopo circa 2 s.
+    /// Durante la lettura le richieste bastano a tenerla aperta.
+    fn passo_mantenimento(&mut self) {
+        let Some(l) = self.link.as_mut() else {
+            return;
+        };
+        if l.piano.is_some() {
+            return;
+        }
+        let Dialogo::Td5(s) = &mut l.dialogo else {
+            return;
+        };
+        let esito = s.mantieni();
+        let registro = s.canale().prendi_registro();
+        if !registro.is_empty() {
+            self.invia(Evento::Registro(registro));
+        }
+        if let Err(e) = esito
+            && e.fatale()
+        {
+            self.chiudi_link(Some(e.to_string()), true);
+        }
+    }
+
+    /// Collegamento in modalità Land Rover Td5 (sola lettura) su un
+    /// trasporto già aperto. Ogni comando all'adattatore e ogni risposta
+    /// vanno nel registro dei collegamenti per tutta la durata della sessione
+    /// (non le richieste della lettura a ripetizione né i mantenimenti
+    /// riusciti): è l'unico modo di capire, sul veicolo, che cosa non va.
+    fn collega_td5(
+        &mut self,
+        trasporto: Box<dyn Transport>,
+        gatt: Option<GattInfo>,
+        diario: Diario,
+    ) {
+        diario.passo(
+            "=== Modalità Land Rover Td5 (sola lettura, mai provata su un veicolo): inizio ===",
+        );
+        let mut stn = Stn::new(trasporto);
+        stn.imposta_diario(diario.clone());
+        let mut s = SessioneTd5::new(Box::new(stn));
+        let fallimento = |w: &Worker, s: &mut SessioneTd5, errore: ErroreUtente| {
+            diario.passo(format!(
+                "=== Collegamento Td5 fallito: {} — {} ===",
+                errore.titolo(),
+                errore.messaggio()
+            ));
+            w.invia(Evento::Registro(s.canale().prendi_registro()));
+            s.canale().imposta_diario(Diario::muto());
+            s.chiudi();
+            w.invia(Evento::Errore(errore));
+            w.stato(StatoConn::Scollegato);
+        };
+
+        // 1. È un OBDLink (chip STN)?
+        self.stato(StatoConn::Connessione(
+            "Verifica dell'adattatore OBDLink…".into(),
+        ));
+        let adattatore = match s.canale().prepara() {
+            Ok(id) => id,
+            Err(e) => {
+                let errore = match e {
+                    ErroreTd5::Scollegato(d) => ErroreUtente::AdattatoreNonRaggiungibile(d),
+                    ErroreTd5::NonStn(d) => ErroreUtente::AdattatoreNonAdattoTd5(d),
+                    altro => ErroreUtente::AdattatoreNonRisponde(altro.to_string()),
+                };
+                fallimento(self, &mut s, errore);
+                return;
+            }
+        };
+        self.invia(Evento::Registro(s.canale().prendi_registro()));
+
+        // 2. Inizializzazione, sessione e accesso di sicurezza.
+        self.stato(StatoConn::Connessione(
+            "Inizializzazione della centralina Td5…".into(),
+        ));
+        if let Err(e) = s.apri_sessione() {
+            let errore = match e {
+                ErroreTd5::Scollegato(d) => ErroreUtente::CollegamentoPerso(d),
+                altro => ErroreUtente::CentralinaTd5(altro.to_string()),
+            };
+            fallimento(self, &mut s, errore);
+            return;
+        }
+
+        // 3. Quali parametri fornisce questa centralina.
+        self.stato(StatoConn::Connessione(
+            "Lettura dei parametri disponibili…".into(),
+        ));
+        let valori = match s.sonda() {
+            Ok(v) => v,
+            Err(e) => {
+                fallimento(self, &mut s, ErroreUtente::CollegamentoPerso(e.to_string()));
+                return;
+            }
+        };
+        let presenti: BTreeSet<u8> = valori
+            .iter()
+            .filter(|v| v.stato == Stato::Ok)
+            .filter_map(|v| pids::per_key(v.chiave).map(|p| p.pid))
+            .collect();
+        let assenti: Vec<&str> = valori
+            .iter()
+            .filter(|v| v.stato != Stato::Ok)
+            .map(|v| v.chiave)
+            .collect();
+        if !assenti.is_empty() {
+            s.canale().annota(format!(
+                "Parametri non forniti dalla centralina: {}",
+                assenti.join(", ")
+            ));
+        }
+        self.invia(Evento::Registro(s.canale().prendi_registro()));
+        let strategia = s.strategia().unwrap_or_default();
+        diario.passo(format!(
+            "=== Collegato (Td5): {}; {strategia}; {} parametri ===",
+            s.descrizione(),
+            presenti.len()
+        ));
+        // Fuori dalla lettura a ripetizione ogni scambio va nel registro
+        // (come per l'OBD-II; vedi `Comando::AvviaPolling`).
+        s.canale().imposta_traccia(true);
+
+        let demo = s.is_demo();
+        let mut avvisi = vec![
+            "Modalità Land Rover Td5 in sola lettura, mai provata su un adattatore o su un \
+             veicolo veri: i valori vanno confrontati con uno strumento di officina."
+                .to_string(),
+        ];
+        if demo {
+            avvisi.push(
+                "Modalità demo: adattatore e centralina Td5 sono simulati, i dati sono sintetici."
+                    .into(),
+            );
+        }
+        let supportati: BTreeMap<String, BTreeSet<u8>> = [(TD5_ECU.to_string(), presenti.clone())]
+            .into_iter()
+            .collect();
+        let info = InfoConn {
+            demo,
+            origine: if demo {
+                Origine::Demo
+            } else {
+                Origine::Veicolo
+            },
+            riproduzione: None,
+            liberi: BTreeSet::new(),
+            collegamento: s.descrizione(),
+            adattatore,
+            protocollo: format!(
+                "Land Rover Td5: KWP2000 su linea K, messaggi senza intestazione ({strategia})"
+            ),
+            protocollo_numero: 0,
+            ecu: vec![TD5_ECU.to_string()],
+            supportati,
+            unione: presenti,
+            gatt,
+            avvisi,
+            td5: true,
+        };
+        self.invia(Evento::Connesso(Box::new(info.clone())));
+        if let Some(m) = &self.mqtt {
+            m.collegato_origine(info.origine);
+        }
+        self.link = Some(Link {
+            dialogo: Dialogo::Td5(Box::new(s)),
+            info,
+            kind: BusKind::Legacy,
+            t0: Instant::now(),
+            piano: None,
+            recorder: None,
+            diagnosi: None,
+            errori_di_fila: 0,
+            distanza: IntegratoreDistanza::new(),
+        });
+        self.stato(StatoConn::Connesso);
     }
 
     // ---- Riproduzione --------------------------------------------------
@@ -1501,6 +1903,7 @@ impl Worker {
             unione: p.unione,
             gatt: None,
             avvisi,
+            td5: false,
         };
         self.invia(Evento::Connesso(Box::new(info)));
         if let Some(m) = &self.mqtt {

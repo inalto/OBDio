@@ -21,6 +21,7 @@ use crate::mcp::{Livello, McpConfig, StatoMcp, StatoMcpInfo};
 use crate::obd::pids;
 use crate::recording;
 use crate::scambio::FormatoEsportazione;
+use crate::td5::TipoVeicolo;
 use crate::transport::demo::DemoTransport;
 use crate::worker::{Comando, ComandoRiproduzione, Sorgente};
 
@@ -498,7 +499,11 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
     }
 
     match c.fase {
-        0 if c.secondi() > 1.0 => c.doppio("connessione"),
+        0 if c.secondi() > 1.0 => {
+            // Indipendente dalla scelta salvata da chi esegue il collaudo.
+            app.tipo_veicolo = TipoVeicolo::ObdStandard;
+            c.doppio("connessione")
+        }
         1 => {
             app.invia(Comando::Collega(Sorgente::Demo));
             c.avanti();
@@ -912,8 +917,56 @@ pub fn passo(app: &mut App, ctx: &egui::Context) {
             c.avanti();
         }
         74 if c.secondi() > 1.0 => c.scatta("largo_registri"),
+        // Modalità Land Rover Td5: la scelta nella pagina Connessione (non
+        // salvata), poi una sessione con l'OBDLink e la centralina simulati.
         75 => {
             app.registri.fissa_alla_scheda = false;
+            app.tipo_veicolo = TipoVeicolo::LandRoverTd5;
+            app.scheda = Scheda::Connessione;
+            c.avanti();
+        }
+        76 if c.secondi() > 0.8 => c.doppio("connessione_td5"),
+        77 => {
+            app.invia(Comando::Collega(Sorgente::DemoTd5));
+            c.avanti();
+        }
+        78 if app.pronto() && app.info.as_ref().is_some_and(|i| i.td5) && c.secondi() > 0.8 => {
+            c.doppio("td5_collegato")
+        }
+        79 => {
+            app.invia(Comando::LeggiDiagnosi);
+            app.scheda = Scheda::Diagnosi;
+            c.avanti();
+        }
+        80 if app.diagnosi.as_ref().is_some_and(|d| d.td5.is_some())
+            && app.pronto()
+            && c.secondi() > 0.8 =>
+        {
+            c.doppio("td5_diagnosi")
+        }
+        81 => {
+            app.scheda = Scheda::Sensori;
+            app.pannello_sensori = PannelloSensori::Elenco;
+            // Il confronto è fatto per le sonde lambda, che il Td5 non ha.
+            app.vista = VistaSensori::PerSensore;
+            app.scorri_sensori = Some(0.0);
+            app.avvia_polling();
+            c.avanti();
+        }
+        82 if app.live.t_max > 8.0 && c.secondi() > 6.0 => c.doppio("td5_sensori"),
+        83 => {
+            app.vista = VistaSensori::Confronto;
+            app.cruscotto.pagina = 0;
+            app.scheda = Scheda::Cruscotto;
+            c.avanti();
+        }
+        84 if c.secondi() > 4.0 => c.scatta("largo_td5_cruscotto"),
+        85 => {
+            app.invia(Comando::Scollega);
+            app.tipo_veicolo = TipoVeicolo::ObdStandard;
+            c.avanti();
+        }
+        86 if !app.collegato() && c.secondi() > 0.5 => {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             c.avanti();
         }

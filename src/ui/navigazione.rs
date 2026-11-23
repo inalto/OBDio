@@ -421,6 +421,10 @@ impl App {
                 "MODALITÀ DEMO".into(),
                 if stretto {
                     " — dati simulati, non da un veicolo".into()
+                } else if self.info.as_ref().is_some_and(|i| i.td5) {
+                    " — tutti i dati sono simulati: adattatore OBDLink e centralina Td5 \
+                     sintetici, non un veicolo"
+                        .into()
                 } else {
                     " — tutti i dati sono simulati; i segnali delle sonde lambda sono sintetici \
                      e non provengono da un veicolo"

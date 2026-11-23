@@ -58,6 +58,11 @@ pub enum Kind {
     /// Parametro «libero» venuto da un file importato (per esempio una
     /// colonna sconosciuta di un CSV di Torque): nessun PID, mai richiesto.
     Libero,
+    /// Parametro della centralina Land Rover Td5, decodificato da
+    /// [`crate::td5::decodifica`]: mai richiesto con il servizio 01. Il suo
+    /// «PID» è un numero da E1 in su, che nessuna centralina OBD-II può
+    /// dichiarare (le maschere arrivano a E0).
+    Td5,
 }
 
 /// Raggruppamento dei parametri nella pagina Sensori.
@@ -95,6 +100,19 @@ impl Gruppo {
 }
 
 fn gruppo_di(key: &str) -> Gruppo {
+    if let Some(td5) = key.strip_prefix("td5_") {
+        return if td5.starts_with("temp_") {
+            Gruppo::TemperatureEPressioni
+        } else if td5.starts_with("pedale")
+            || td5.starts_with("iniettore")
+            || td5 == "egr"
+            || td5 == "wastegate"
+        {
+            Gruppo::Motore
+        } else {
+            Gruppo::Altro
+        };
+    }
     if key.starts_with("o2s") {
         return Gruppo::SondeLambda;
     }
@@ -452,6 +470,7 @@ fn costruisci() -> Vec<Param> {
             3,
         ),
     ];
+    v.extend(parametri_td5());
     for n in 1..=8u8 {
         let s = nome_sonda(n);
         v.push(p(
@@ -507,6 +526,108 @@ fn costruisci() -> Vec<Param> {
     v
 }
 
+/// Parametri solo del Td5 (le chiavi in comune con l'OBD-II, come giri e
+/// temperature, usano le voci già presenti). Vedi [`crate::td5::decodifica`].
+fn parametri_td5() -> Vec<Param> {
+    use crate::td5::decodifica::{
+        CHIAVE_ALIMENTAZIONE, CHIAVE_EGR, CHIAVE_TEMP_GASOLIO, CHIAVE_WASTEGATE, CHIAVI_INIETTORI,
+        CHIAVI_PEDALE,
+    };
+    let mut v = vec![p(
+        CHIAVE_TEMP_GASOLIO,
+        0xE1,
+        "Temperatura gasolio (Td5)",
+        "°C",
+        Kind::Td5,
+        1,
+    )];
+    for (i, k) in CHIAVI_PEDALE.iter().enumerate() {
+        v.push(p(
+            k,
+            0xE2 + i as u8,
+            &format!("Pedale acceleratore, traccia {} (Td5)", i + 1),
+            "V",
+            Kind::Td5,
+            3,
+        ));
+    }
+    v.push(p(
+        CHIAVE_ALIMENTAZIONE,
+        0xE6,
+        "Alimentazione 5 V dei sensori (Td5)",
+        "V",
+        Kind::Td5,
+        3,
+    ));
+    v.push(p(
+        CHIAVE_EGR,
+        0xE7,
+        "Posizione EGR (Td5)",
+        "%",
+        Kind::Td5,
+        2,
+    ));
+    v.push(p(
+        CHIAVE_WASTEGATE,
+        0xE8,
+        "Posizione wastegate (Td5)",
+        "%",
+        Kind::Td5,
+        2,
+    ));
+    for (i, k) in CHIAVI_INIETTORI.iter().enumerate() {
+        let mut x = p(
+            k,
+            0xE9 + i as u8,
+            &format!(
+                "Correzione iniettore cilindro {} (Td5, valore grezzo)",
+                i + 1
+            ),
+            "",
+            Kind::Td5,
+            0,
+        );
+        x.con_segno = true;
+        v.push(x);
+    }
+    let interruttori = [
+        (
+            "td5_freno_secondario",
+            "Freno, secondo circuito (Td5: 1 = premuto)",
+        ),
+        ("td5_frizione", "Frizione (Td5: 1 = premuta)"),
+        (
+            "td5_cruise_principale",
+            "Cruise control, interruttore principale (Td5: 1 = attivo)",
+        ),
+        (
+            "td5_cruise_set",
+            "Cruise control, Set/Accelera (Td5: 1 = premuto)",
+        ),
+        (
+            "td5_cruise_resume",
+            "Cruise control, Resume (Td5: 1 = premuto)",
+        ),
+        ("td5_ac_ventola", "Richiesta ventola A/C (Td5: 1 = attiva)"),
+        (
+            "td5_ac_compressore",
+            "Richiesta compressore A/C (Td5: 1 = attiva)",
+        ),
+        (
+            "td5_riduttore_ridotte",
+            "Riduttore in marce ridotte (Td5: 1 = ridotte)",
+        ),
+        (
+            "td5_freno_principale",
+            "Freno, interruttore principale (Td5: 1 = premuto)",
+        ),
+    ];
+    for (i, (k, nome)) in interruttori.iter().enumerate() {
+        v.push(p(k, 0xEE + i as u8, nome, "", Kind::Td5, 0));
+    }
+    v
+}
+
 /// Tutti i parametri numerici conosciuti, ordinati per PID.
 pub fn catalogo() -> &'static [Param] {
     static C: OnceLock<Vec<Param>> = OnceLock::new();
@@ -517,7 +638,7 @@ pub fn catalogo() -> &'static [Param] {
 pub fn per_pid(pid: u8) -> impl Iterator<Item = &'static Param> {
     catalogo()
         .iter()
-        .filter(move |x| x.pid == pid && !x.derivato)
+        .filter(move |x| x.pid == pid && !x.derivato && x.kind != Kind::Td5)
 }
 
 /// Parametro del catalogo o, in mancanza, parametro libero registrato.
@@ -637,8 +758,9 @@ pub fn decodifica(par: &Param, d: &[u8]) -> Decodifica {
             Some(&[a, b, c, e]) => Some(u32::from_be_bytes([a, b, c, e]) as f64 / 10.0),
             _ => None,
         },
-        // Non esiste una risposta della centralina da decodificare.
-        Kind::Calcolato | Kind::Libero => None,
+        // Non esiste una risposta della centralina da decodificare (i
+        // parametri del Td5 li decodifica `crate::td5::decodifica`).
+        Kind::Calcolato | Kind::Libero | Kind::Td5 => None,
     };
     match r {
         Some(v) => Valore(v),

@@ -119,6 +119,9 @@ pub struct App {
     pub(crate) porte: Vec<PortaSeriale>,
     pub(crate) porta_scelta: String,
     pub(crate) baud: u32,
+    /// Tipo di veicolo scelto (OBD-II standard o Land Rover Td5), salvato
+    /// nella configurazione.
+    pub(crate) tipo_veicolo: crate::td5::TipoVeicolo,
 
     // Diagnosi
     pub(crate) diagnosi: Option<DiagnosisReport>,
@@ -251,6 +254,9 @@ impl App {
             porte: Vec::new(),
             porta_scelta: String::new(),
             baud: 38400,
+            tipo_veicolo:
+                crate::td5::TipoVeicolo::carica(&crate::config::cartella_configurazione())
+                    .unwrap_or_default(),
             diagnosi: None,
             includi_vin: false,
             scorri_diagnosi: None,
@@ -425,8 +431,11 @@ impl App {
                     self.riproduzione = None;
                     self.trascina_posizione = None;
                     let riproduzione = info.in_riproduzione();
+                    let td5 = info.td5;
                     self.info = Some(*info);
-                    if riproduzione {
+                    // Con il Td5 il preset P0420 non ha senso: si leggono
+                    // tutti i parametri che la centralina fornisce.
+                    if riproduzione || td5 {
                         // In riproduzione scorrono tutti i dati della sessione:
                         // la pagina Sensori li mostra tutti.
                         self.selezione = self

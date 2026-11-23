@@ -16,7 +16,12 @@ use crate::obd::pids;
 use crate::obd::readiness::Monitor;
 use crate::riproduzione::data_leggibile;
 use crate::summary::{self, valore_con_unita};
+use crate::td5::{DiagnosiTd5, TipoVeicolo};
 use crate::worker::{Comando, Sorgente, StatoConn};
+
+/// Perché il pulsante di cancellazione manca con il Td5.
+const NOTA_CANCELLAZIONE_TD5: &str = "Con la centralina Land Rover Td5 i codici guasto non si \
+                                      cancellano: la modalità Td5 è di sola lettura, per scelta.";
 
 const EXTRA: [&str; 5] = ["giri", "velocita", "temp_refrigerante", "carico", "map"];
 
@@ -110,6 +115,10 @@ fn righe_in_colonne(ui: &mut egui::Ui, stretto: bool, righe: &[(String, RichText
 
 /// Mostra un referto di diagnosi (dal vivo o da una sessione salvata).
 pub(super) fn disegna_diagnosi(ui: &mut egui::Ui, d: &DiagnosisReport, stretto: bool) {
+    if let Some(t) = &d.td5 {
+        disegna_diagnosi_td5(ui, d, t, stretto);
+        return;
+    }
     // Codici guasto, con la spia MIL in testa.
     scheda_titolata(ui, "Codici guasto", |ui| {
         for p in &d.prontezza {
@@ -447,6 +456,105 @@ pub(super) fn disegna_diagnosi(ui: &mut egui::Ui, d: &DiagnosisReport, stretto: 
     });
 }
 
+/// Referto della centralina Land Rover Td5: i suoi codici guasto (non sono
+/// codici OBD-II), identificazione e tensione. Niente MIL, prontezza, fermo
+/// immagine né Mode 06, che il Td5 non ha.
+fn disegna_diagnosi_td5(ui: &mut egui::Ui, d: &DiagnosisReport, t: &DiagnosiTd5, stretto: bool) {
+    scheda_titolata(ui, "Codici guasto della centralina Td5", |ui| {
+        nota(
+            ui,
+            "Numerazione propria del Td5 (byte e bit della mappa dei guasti): non sono codici \
+             OBD-II «P».",
+        );
+        ui.add_space(tema::SP_2);
+        riga_lettura(ui, "Lettura", &t.lettura_guasti);
+        if d.dtc.is_empty() {
+            if t.lettura_guasti.stato == Stato::Ok {
+                ui.label("Nessun guasto segnalato dalla centralina.");
+            }
+        } else {
+            for (i, x) in d.dtc.iter().enumerate() {
+                if i > 0 {
+                    ui.separator();
+                }
+                if stretto {
+                    ui.label(RichText::new(&x.codice).monospace().strong());
+                    ui.add(egui::Label::new(&x.descrizione).wrap());
+                } else {
+                    ui.horizontal_top(|ui| {
+                        ui.spacing_mut().item_spacing.x = tema::SP_6;
+                        ui.allocate_ui_with_layout(
+                            vec2(48.0, 0.0),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.set_width(48.0);
+                                ui.label(RichText::new(&x.codice).monospace().strong());
+                            },
+                        );
+                        ui.add(egui::Label::new(&x.descrizione).wrap());
+                    });
+                }
+            }
+        }
+        ui.add_space(tema::SP_2);
+        nota(
+            ui,
+            "Nomi dei guasti dalla tabella del progetto Td5OpenDiag (licenza Apache 2.0), in \
+             inglese come nell'originale; la traduzione italiana c'è solo dove il significato è \
+             chiaro. Il significato di (L) e (C) non è documentato. I codici non si cancellano \
+             da OBDio.",
+        );
+    });
+
+    scheda_titolata(ui, "Centralina e lettura", |ui| {
+        let mancante = || RichText::new("non fornito").color(tema::TESTO_3);
+        let mut righe: Vec<(String, RichText)> = vec![
+            (
+                "Lettura del".into(),
+                RichText::new(data_leggibile(&d.letto_il)),
+            ),
+            (
+                "Tipo di centralina".into(),
+                t.tipo_centralina
+                    .as_deref()
+                    .map(RichText::new)
+                    .unwrap_or_else(mancante),
+            ),
+            (
+                "Variante della mappa".into(),
+                t.variante_mappa
+                    .as_deref()
+                    .map(RichText::new)
+                    .unwrap_or_else(mancante),
+            ),
+            (
+                "Tensione della batteria".into(),
+                t.tensione_batteria
+                    .map(|v| RichText::new(format!("{} V (letta dalla centralina)", num_it(v, 2))))
+                    .unwrap_or_else(mancante),
+            ),
+            (
+                "Adattatore".into(),
+                RichText::new(format!("{} — {}", d.adattatore, d.collegamento)),
+            ),
+            ("Protocollo".into(), RichText::new(&d.protocollo)),
+        ];
+        if let Some(s) = &t.strategia {
+            righe.push(("Modo di collegamento".into(), RichText::new(s)));
+        }
+        for (e, v) in righe {
+            riga_valore(ui, stretto, &e, v);
+        }
+        ui.add_space(tema::SP_1);
+        nota(
+            ui,
+            "Tipo di centralina e variante della mappa sono mostrati come li manda la \
+             centralina: il loro formato non è documentato. Il Td5 non ha la spia MIL, i \
+             monitor di prontezza, il fermo immagine né il Mode 06 dell'OBD-II.",
+        );
+    });
+}
+
 impl App {
     // ------------------------------------------------------------------
     // Connessione
@@ -527,6 +635,13 @@ impl App {
             }
             righe.push(("Adattatore", info.adattatore.clone()));
             righe.push(("Protocollo", info.protocollo.clone()));
+            let td5 = info.td5 || info.protocollo.contains("Td5");
+            if td5 {
+                righe.push((
+                    "Modalità",
+                    "Land Rover Td5, sola lettura (mai provata su un veicolo)".into(),
+                ));
+            }
             if info.protocollo.contains("ISO 9141") || info.protocollo.contains("ISO 14230") {
                 righe.push((
                     "Nota",
@@ -534,11 +649,16 @@ impl App {
                 ));
             }
             righe.push(("Centraline che rispondono", info.ecu.join(", ")));
+            let unita_parametri = if td5 {
+                "parametri del Td5"
+            } else {
+                "PID del servizio 01"
+            };
             if riproduzione.is_some() {
                 righe.push((
                     "Parametri nella sessione",
                     format!(
-                        "{} PID del servizio 01{}",
+                        "{} {unita_parametri}{}",
                         info.unione.len(),
                         if info.liberi.is_empty() {
                             String::new()
@@ -549,8 +669,12 @@ impl App {
                 ));
             } else {
                 righe.push((
-                    "Parametri dichiarati",
-                    format!("{} PID del servizio 01", info.unione.len()),
+                    if td5 {
+                        "Parametri forniti"
+                    } else {
+                        "Parametri dichiarati"
+                    },
+                    format!("{} {unita_parametri}", info.unione.len()),
                 ));
             }
             if let Some(g) = &info.gatt {
@@ -631,6 +755,7 @@ impl App {
              non esegue codifiche né test attuatori e non permette di inviare comandi liberi.",
         );
         ui.add_space(tema::SP_3);
+        self.scheda_veicolo(ui, libero);
         if stretto || ui.available_width() < 760.0 {
             self.scheda_ble(ui, true, libero);
             self.scheda_seriale(ui, true, libero);
@@ -644,6 +769,66 @@ impl App {
                 self.scheda_riproduzione(&mut c[1], false, libero);
             });
         }
+    }
+
+    /// Scelta fra OBD-II standard e centralina Land Rover Td5; la scelta vale
+    /// per il collegamento BLE, seriale e per la demo, e resta salvata.
+    fn scheda_veicolo(&mut self, ui: &mut egui::Ui, libero: bool) {
+        scheda_titolata(ui, "Tipo di veicolo", |ui| {
+            let prima = self.tipo_veicolo;
+            ui.add_enabled_ui(libero, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for t in TipoVeicolo::TUTTI {
+                        ui.radio_value(&mut self.tipo_veicolo, t, t.nome());
+                    }
+                });
+            });
+            if self.tipo_veicolo != prima
+                && let Err(e) = self
+                    .tipo_veicolo
+                    .salva(&crate::config::cartella_configurazione())
+            {
+                self.errore = Some(crate::worker::ErroreUtente::Altro(format!(
+                    "Scelta del veicolo non salvata: {e}"
+                )));
+            }
+            if self.tipo_veicolo == TipoVeicolo::LandRoverTd5 {
+                ui.add_space(tema::SP_2);
+                paragrafo(
+                    ui,
+                    "Defender e Discovery 2 con motore Td5 (1998–2006). Serve un adattatore \
+                     OBDLink CX (Bluetooth LE, qui sotto) o OBDLink LX (Bluetooth classico, \
+                     porta seriale): gli adattatori ELM327, come il Carista, non possono parlare \
+                     con questa centralina.",
+                );
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "Sola lettura: dati in tempo reale, codici guasto e \
+                             identificazione; niente cancellazione dei codici né prove degli \
+                             attuatori. Questa modalità non è ancora stata provata su un \
+                             veicolo vero.",
+                        )
+                        .color(tema::ATTENZIONE),
+                    )
+                    .wrap(),
+                );
+            }
+        });
+    }
+
+    /// La sorgente nella modalità del tipo di veicolo scelto.
+    fn con_veicolo(&self, s: Sorgente) -> Sorgente {
+        match self.tipo_veicolo {
+            TipoVeicolo::ObdStandard => s,
+            TipoVeicolo::LandRoverTd5 => Sorgente::Td5(Box::new(s)),
+        }
+    }
+
+    /// Vero se il collegamento o la diagnosi mostrata sono del Td5.
+    fn diagnosi_td5(&self) -> bool {
+        self.info.as_ref().is_some_and(|i| i.td5)
+            || self.diagnosi.as_ref().is_some_and(|d| d.td5.is_some())
     }
 
     /// Bluetooth Low Energy: ricerca, elenco toccabile, collegamento.
@@ -715,7 +900,7 @@ impl App {
             {
                 self.errore = None;
                 self.gatt_sconosciuto = None;
-                self.invia(Comando::Collega(Sorgente::Ble(indirizzo)));
+                self.invia(Comando::Collega(self.con_veicolo(Sorgente::Ble(indirizzo))));
             }
         });
     }
@@ -856,10 +1041,10 @@ impl App {
                 .clicked()
                 {
                     self.errore = None;
-                    self.invia(Comando::Collega(Sorgente::Seriale {
+                    self.invia(Comando::Collega(self.con_veicolo(Sorgente::Seriale {
                         porta: self.porta_scelta.clone(),
                         baud: self.baud,
-                    }));
+                    })));
                 }
             };
             if pieno {
@@ -871,17 +1056,31 @@ impl App {
     }
 
     fn scheda_demo(&mut self, ui: &mut egui::Ui, pieno: bool, libero: bool) {
+        let td5 = self.tipo_veicolo == TipoVeicolo::LandRoverTd5;
         scheda_titolata(ui, "Modalità demo", |ui| {
             paragrafo(
                 ui,
-                "Prova l'app senza veicolo: un simulatore risponde come un ELM327 collegato a \
-                 un motore benzina con P0420. I dati sono sintetici.",
+                if td5 {
+                    "Prova la modalità Td5 senza veicolo: un simulatore risponde come un OBDLink \
+                     collegato a una centralina Land Rover Td5. I dati sono sintetici."
+                } else {
+                    "Prova l'app senza veicolo: un simulatore risponde come un ELM327 collegato \
+                     a un motore benzina con P0420. I dati sono sintetici."
+                },
             );
             ui.add_space(tema::SP_2);
-            if componenti::pulsante(ui, pieno, libero, egui::Button::new("Avvia la demo")).clicked()
-            {
+            let testo = if td5 {
+                "Avvia la demo Td5"
+            } else {
+                "Avvia la demo"
+            };
+            if componenti::pulsante(ui, pieno, libero, egui::Button::new(testo)).clicked() {
                 self.errore = None;
-                self.invia(Comando::Collega(Sorgente::Demo));
+                self.invia(Comando::Collega(if td5 {
+                    Sorgente::DemoTd5
+                } else {
+                    Sorgente::Demo
+                }));
             }
         });
     }
@@ -974,7 +1173,13 @@ impl App {
                 }
                 // Azione distruttiva: all'estremo opposto di «Leggi diagnosi».
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if self.pulsante_cancella(ui, false, pronto, riproduzione) {
+                    if self.diagnosi_td5() {
+                        ui.label(
+                            RichText::new("Cancellazione non disponibile con il Td5")
+                                .color(tema::TESTO_2),
+                        )
+                        .on_hover_text(NOTA_CANCELLAZIONE_TD5);
+                    } else if self.pulsante_cancella(ui, false, pronto, riproduzione) {
                         self.conferma_cancellazione = Some(false);
                     }
                 });
@@ -1030,7 +1235,11 @@ impl App {
             }
             // Sullo stretto l'azione distruttiva sta in fondo, lontano da
             // «Leggi diagnosi».
-            if stretto {
+            if stretto && self.diagnosi_td5() {
+                ui.add_space(tema::SP_4);
+                nota(ui, NOTA_CANCELLAZIONE_TD5);
+                ui.add_space(tema::SP_6);
+            } else if stretto {
                 ui.add_space(tema::SP_4);
                 let mut apri = false;
                 componenti::cornice_scheda()

@@ -1058,6 +1058,17 @@ fn diagnosi_json(d: &DiagnosiLetta) -> Value {
                     whether a test passed.",
             },
             "supported_pids": pid,
+            "land_rover_td5": r.td5.as_ref().map(|t| json!({
+                "fault_map_read": lettura_json(&t.lettura_guasti),
+                "ecu_type": t.tipo_centralina,
+                "map_variant": t.variante_mappa,
+                "battery_voltage_v": t.tensione_batteria.filter(|v| v.is_finite()),
+                "adapter_strategy": t.strategia,
+                "note": "Land Rover Td5 ECU, read-only mode never tested on a real adapter or \
+                    vehicle. Fault codes are the Td5's own numbering (byte-bit of the fault \
+                    map), not OBD-II P-codes; names from the Td5OpenDiag table. Clearing \
+                    codes is not available for this ECU, by design.",
+            })),
             "note": "This report lists what the ECU reported. It does not establish which \
                 component is faulty. Descriptions and monitor names may be in Italian or \
                 English.",

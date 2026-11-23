@@ -649,6 +649,51 @@ fn in_sola_lettura_le_azioni_sono_rifiutate() {
     w.chiudi();
 }
 
+/// Gli strumenti di lettura esistenti funzionano anche con la centralina Td5
+/// simulata; nessuno strumento nuovo, nessun VIN.
+#[test]
+fn strumenti_di_lettura_con_la_centralina_td5() {
+    use obdio::td5::simulato::SimulatoreTd5;
+    let w = Lavoro::avvia("td5");
+    let porta = w.accendi(config(Livello::LetturaEAzioni));
+    let mut c = Client::collega(porta);
+    assert_eq!(c.nomi_strumenti().len(), 14);
+    w.invia(Comando::Collega(Sorgente::Td5(Box::new(
+        Sorgente::Trasporto(Box::new(SimulatoreTd5::new())),
+    ))));
+    attendi(&w.rx, 20, |e| match e {
+        Evento::Connesso(i) => i.td5.then_some(()),
+        Evento::Errore(e) => panic!("errore inatteso: {e:?}"),
+        _ => None,
+    });
+    let sensori = c.strumento("list_sensors", json!({})).to_string();
+    assert!(sensori.contains("td5_temp_gasolio") && sensori.contains("giri"));
+    c.strumento(
+        "start_reading",
+        json!({ "keys": ["giri", "td5_temp_gasolio"] }),
+    );
+    let v = finche(15, "valori del Td5", || {
+        let v = c.strumento("get_live_values", json!({}));
+        (v["values"]["giri"]["value"].is_number()
+            && v["values"]["td5_temp_gasolio"]["value"].is_number())
+        .then_some(v)
+    });
+    assert_eq!(v["values"]["giri"]["value"], 744.0);
+    assert_eq!(v["values"]["td5_temp_gasolio"]["value"], 64.0);
+    c.strumento("stop_reading", json!({}));
+    c.strumento("read_diagnosis", json!({}));
+    let d = finche(15, "diagnosi del Td5", || {
+        let d = c.strumento("get_diagnosis", json!({}));
+        (d["available"] == true).then_some(d)
+    });
+    assert_eq!(d["dtcs"][0]["code"], "02-4");
+    assert_eq!(d["dtcs"][0]["generic"], false);
+    assert_eq!(d["land_rover_td5"]["ecu_type"], "PROVA");
+    assert!(d["vin"].is_null());
+    assert!(!d.to_string().contains("TDCINQUE"));
+    w.chiudi();
+}
+
 #[test]
 fn richieste_respinte_token_origine_dimensione() {
     let w = Lavoro::avvia("respinte");

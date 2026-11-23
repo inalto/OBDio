@@ -6,6 +6,8 @@
 //! - [`elm`]: dialogo ELM327 con elenco chiuso dei comandi ammessi;
 //! - [`obd`]: decodifica delle risposte OBD-II;
 //! - [`diagnosis`]: lettura di DTC, prontezza, fermo immagine, Mode 06;
+//! - [`td5`]: modalità Land Rover Td5 in sola lettura (OBDLink CX/LX), mai
+//!   provata su un veicolo;
 //! - [`recording`]: sessioni su disco ed esportazione CSV;
 //! - [`registri`]: registro degli errori fatali e dei passi di collegamento;
 //! - [`scambio`]: importazione ed esportazione (CSV OBDio, CSV in stile Torque, JSON);
@@ -33,6 +35,7 @@ pub mod registri;
 pub mod riproduzione;
 pub mod scambio;
 pub mod summary;
+pub mod td5;
 pub mod transport;
 pub mod ui;
 pub mod worker;

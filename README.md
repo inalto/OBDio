@@ -22,6 +22,11 @@ Versione 1.1.0. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
 con codice P0420. Le novità rispetto alla prima versione, fase per fase, sono
 in [docs/NOVITA.md](docs/NOVITA.md).
 
+**Land Rover Td5 (non ancora in un rilascio).** Per Defender e Discovery 2
+con motore Td5 c'è una modalità a parte, in sola lettura, con un adattatore
+OBDLink CX o LX: vedi [Land Rover Td5](#land-rover-td5). **Non è mai stata
+provata su un adattatore o su un veicolo.**
+
 > **Stato delle verifiche.** Tutto il flusso è stato verificato in modalità
 > demo e con test automatici. **Non è ancora stato provato su un adattatore
 > Carista né sull'auto, né con un broker MQTT o Home Assistant reali, né con un
@@ -39,6 +44,7 @@ in [docs/NOVITA.md](docs/NOVITA.md).
 - [Importare ed esportare le sessioni](#importare-ed-esportare-le-sessioni)
 - [Rivivere una sessione (riproduzione)](#rivivere-una-sessione-riproduzione)
 - [Cosa mostra la diagnosi](#cosa-mostra-la-diagnosi), [Cancellare i codici guasto](#cancellare-i-codici-guasto)
+- [Land Rover Td5](#land-rover-td5) (sola lettura, OBDLink CX/LX, mai provata su un veicolo)
 - [MQTT](#mqtt), [Server MCP per assistenti AI](#server-mcp-per-assistenti-ai), [Aggiornamenti](#aggiornamenti), [Android](#android)
 - [Stato delle verifiche](#stato-delle-verifiche), [Controlli da fare sull'auto](#controlli-da-fare-sullauto)
 - [Limiti noti](#limiti-noti), [Comandi inviati](#comandi-inviati), [Compilare dai sorgenti](#compilare-dai-sorgenti)
@@ -542,6 +548,34 @@ centraline rifiutano la richiesta.
 > e con risposte a copione (accettata, rifiutata `7F 04 22`, nessuna risposta,
 > collegamento caduto). **Non è mai stata provata su un veicolo.**
 
+## Land Rover Td5
+
+La centralina del motore Td5 (Defender e Discovery 2, 1998–2006) non parla
+OBD-II: usa un dialetto di KWP2000 con messaggi senza intestazione, che un
+adattatore ELM327 (Carista compreso) non sa mandare. OBDio la legge solo con
+un **OBDLink CX** (Bluetooth LE) o **OBDLink LX** (Bluetooth classico,
+porta COM), che hanno un chip STN con comandi per i messaggi grezzi.
+
+1. Scheda **Connessione** → **Tipo di veicolo**: «Land Rover Td5 (OBDLink
+   CX/LX)». La scelta resta salvata.
+2. Collega l'adattatore come di consueto (BLE o porta seriale), con il quadro
+   acceso. Se l'adattatore non è un OBDLink l'app lo dice e non insiste.
+3. Cruscotto, Sensori, registrazione, MQTT e MCP funzionano come con l'OBD-II;
+   la Diagnosi mostra i codici guasto del Td5 (con la loro numerazione, per
+   esempio «02-4»), il tipo di centralina, la variante della mappa e la
+   tensione della batteria.
+
+Sola lettura: nessuna cancellazione dei codici, nessuna prova degli attuatori.
+Per provarla senza adattatore: tipo di veicolo Td5 → **Avvia la demo Td5**.
+Protocollo, fonti, strategie dei comandi e punti da verificare sono in
+[docs/RICERCA_TD5.md](docs/RICERCA_TD5.md); licenze dei componenti ripresi in
+[LICENSE-THIRD-PARTY.md](LICENSE-THIRD-PARTY.md).
+
+> **Verifica.** Provata solo con un OBDLink e una centralina Td5 simulati
+> (test automatici e collaudo dell'interfaccia). **Mai provata su un
+> adattatore OBDLink né su un veicolo**: se non funziona, il registro dei
+> collegamenti (Impostazioni → Registri) contiene ogni comando e ogni risposta.
+
 ## MQTT
 
 ![Pagina Impostazioni con il modulo MQTT](docs/schermate/impostazioni.png)
@@ -683,6 +717,7 @@ non è verificabile: è un'ipotesi, non un dato.
 | Chiusura improvvisa durante il collegamento BLE a un Carista reale (segnalata con la 1.0.0 su un altro PC Windows 11) | **Causa trovata con i registri della 1.0.1, correzione (1.0.2) non ancora provata sull'adattatore.** Il collegamento riesce (profilo FFF0, notifiche attive); il primo comando inviato andava in panic perché il tempo massimo della scrittura BLE veniva creato fuori dal runtime asincrono («there is no reactor running»). Nella 1.0.0 lo stesso errore nello scollegamento causava un doppio panic e l'abort del processo. Corretto in `src/transport/ble.rs` con una prova di regressione. L'ipotesi precedente (un `unwrap()` di btleplug in un gestore WinRT) non era la causa; le correzioni in `vendor/btleplug` restano come protezione. Mai provato finora su hardware: lo scambio dei comandi ELM327 via BLE |
 | Connessione seriale/SPP a un adattatore reale | **Non provata** |
 | Lettura da una centralina reale (208 o altro) | **Non provata** |
+| Modalità Land Rover Td5 con un OBDLink CX/LX e una centralina Td5 | **Mai provata su un adattatore né su un veicolo.** Provata solo con un OBDLink e una centralina Td5 simulati, che rispondono come OBDio si aspetta: messaggi e checksum con gli esempi pubblicati, chiave dal seme, le tre strategie dei comandi e il loro ripiego, chiave rifiutata, sessione caduta e riaperta, mantenimento a riposo, adattatore ELM327 rifiutato, lettura, registrazione, riapertura, MCP, VIN mai nei registri né nei file; schermate dal collaudo automatico |
 
 ## Controlli da fare sull'auto
 
@@ -750,6 +785,17 @@ servizi, `04` compreso.
 
 Mai inviati: `08`, servizi UDS di scrittura, codifica o comando attuatori,
 comandi liberi.
+
+Con il **Land Rover Td5** l'elenco chiuso è `RichiestaTd5` in
+`src/td5/richieste.rs`: `10 A0`, `27 01`, `27 02` con la chiave calcolata dal
+seme, `3E 01`, `21` con gli identificativi 09, 0D, 10, 1A, 1B, 1C, 1E, 23,
+37, 38, 40, 3B (guasti) e 32 (variante della mappa), `1A 87` e `1A 9A`. Comandi
+all'adattatore: `ATZ`, `ATE0`, `ATL0`, `ATS1`, `ATH1`, `ATSW 00` (o
+`ATWM 023E01`), `STI`, `STDI`, `STP 21`/`25`, `STPBR`, `STPTO`, `STPTRQ`,
+`STIP1X`, `STIFI` e `STPX` (dettagli in
+[docs/RICERCA_TD5.md](docs/RICERCA_TD5.md)). Cancellazione dei guasti
+(`31 DD`), prove degli attuatori (`30`, `31 C2`), scrittura e
+programmazione non esistono nel codice.
 
 ## Android
 

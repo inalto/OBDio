@@ -70,6 +70,22 @@ pub fn riepilogo(r: &DiagnosisReport, includi_vin: bool) -> String {
         (Some(_), false) => riga("VIN: escluso dal riepilogo".into()),
         (None, _) => riga("VIN: non letto".into()),
     }
+    if let Some(t) = &r.td5 {
+        riga(
+            "Centralina Land Rover Td5 (modalità di sola lettura, mai provata su un veicolo)"
+                .into(),
+        );
+        let o = |v: &Option<String>| v.clone().unwrap_or_else(|| "non fornito".into());
+        riga(format!("Tipo di centralina: {}", o(&t.tipo_centralina)));
+        riga(format!("Variante della mappa: {}", o(&t.variante_mappa)));
+        if let Some(v) = t.tensione_batteria {
+            riga(format!(
+                "Tensione della batteria (centralina): {} V",
+                num_it(v, 2)
+            ));
+        }
+        riga("I codici guasto sono nella numerazione del Td5, non codici OBD-II.".into());
+    }
 
     riga(String::new());
     riga(format!(

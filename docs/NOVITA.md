@@ -196,3 +196,29 @@ una parte.
   un veicolo a linea K**, e non è confermato che l'adattatore Carista la
   supporti. Mancano ancora il servizio 06 fuori da CAN e la scelta manuale
   del protocollo.
+
+## Td5 (Land Rover) — non ancora in un rilascio
+
+Ricerca e stato in [RICERCA_TD5.md](RICERCA_TD5.md). **Mai provata su un
+adattatore o su un veicolo**: tutto è verificato con un OBDLink e una
+centralina Td5 simulati.
+
+- Nella pagina Connessione si sceglie il tipo di veicolo: «OBD-II standard»
+  (come prima) o «Land Rover Td5 (OBDLink CX/LX)». La scelta resta salvata.
+- Con il Td5 il collegamento BLE (OBDLink CX) o seriale (OBDLink LX) usa i
+  comandi ST del chip STN: tre modi di far passare i messaggi senza
+  intestazione, provati in ordine; ogni comando e ogni risposta vanno nel
+  registro dei collegamenti.
+- Accesso di sicurezza con l'algoritmo di td5keygen (licenza BSD, in
+  [LICENSE-THIRD-PARTY.md](../LICENSE-THIRD-PARTY.md)); sessione tenuta viva
+  dall'app e riaperta da sola, una volta, se cade.
+- Dati in tempo reale su cruscotto, sensori, grafici, registrazione, CSV,
+  riproduzione, MQTT e MCP: giri, velocità, temperature del liquido,
+  dell'aria e del gasolio, pressione del collettore e ambiente, tensione,
+  tracce del pedale, EGR, wastegate, correzione degli iniettori, interruttori.
+- Diagnosi con i codici guasto del Td5 (nomi dalla tabella di Td5OpenDiag),
+  tipo di centralina, variante della mappa e tensione. Sola lettura: niente
+  cancellazione dei codici né prove degli attuatori, per scelta.
+- Un adattatore di tipo ELM327 viene riconosciuto e rifiutato con una
+  spiegazione.
+- «Avvia la demo Td5» per vedere la modalità senza adattatore.
