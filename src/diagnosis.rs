@@ -249,9 +249,13 @@ pub fn leggi(elm: &mut Elm, ctx: &Contesto<'_>) -> Result<DiagnosisReport, Scoll
         r.norma_obd = leggi_testo(elm, PID_NORMA_OBD, pids::norma_obd)?;
     }
 
-    // VIN: solo su CAN, dove la risposta è un unico messaggio ricomposto.
-    if can && let Esito::Dati(msg) = elm.interroga(ObdRequest::Vin)? {
-        r.vin = msg.first().and_then(|m| vin_da_messaggio(&m.data));
+    // VIN: su CAN un unico messaggio ricomposto, altrove più messaggi numerati.
+    if let Esito::Dati(msg) = elm.interroga(ObdRequest::Vin)? {
+        r.vin = if can {
+            msg.first().and_then(|m| vin_da_messaggio(&m.data))
+        } else {
+            vin_da_messaggi_non_can(&msg)
+        };
     }
     Ok(r)
 }
@@ -280,6 +284,27 @@ fn vin_da_messaggio(data: &[u8]) -> Option<String> {
     let ascii: String = data
         .get(3..)?
         .iter()
+        .filter(|b| b.is_ascii_alphanumeric())
+        .map(|b| *b as char)
+        .collect();
+    (ascii.len() == 17).then_some(ascii)
+}
+
+/// Fuori da CAN (linea K, J1850) il VIN arriva in più messaggi
+/// `49 02 <n> <4 byte>`, con `<n>` da 1 in su e il primo riempito di zeri.
+/// Vale la prima centralina che risponde.
+fn vin_da_messaggi_non_can(msg: &[crate::obd::frames::EcuMessage]) -> Option<String> {
+    let ecu = &msg.first()?.ecu;
+    let mut pezzi: Vec<(u8, &[u8])> = msg
+        .iter()
+        .filter(|m| &m.ecu == ecu && m.data.len() > 3)
+        .map(|m| (m.data[2], &m.data[3..]))
+        .collect();
+    pezzi.sort_by_key(|p| p.0);
+    pezzi.dedup_by_key(|p| p.0);
+    let ascii: String = pezzi
+        .iter()
+        .flat_map(|p| p.1.iter())
         .filter(|b| b.is_ascii_alphanumeric())
         .map(|b| *b as char)
         .collect();
@@ -624,5 +649,111 @@ mod tests {
         assert_eq!(r.vin.as_deref(), Some("VF3ABCDEFGHIJKLMN"));
         let json = serde_json::to_string(&r).unwrap();
         assert!(!json.contains("VF3ABCDEFGHIJKLMN"));
+    }
+}
+
+/// Lettura completa da veicoli a linea K simulati (docs/RICERCA_K_LINE.md).
+#[cfg(test)]
+mod prove_linea_k {
+    use super::*;
+    use crate::transport::copione::{Copione, riga_iso9141, riga_kwp};
+
+    const VIN: &str = "ZFA18800004567890";
+
+    /// Copione di un veicolo a linea K con due codici confermati su due
+    /// messaggi, nessun codice in sospeso e il VIN su cinque messaggi.
+    fn veicolo(dpn: &str, ecu: u8, riga: fn(u8, &[u8]) -> String) -> Copione {
+        let risposta = |righe: Vec<String>| format!("{}\r\r>", righe.join("\r"));
+        let mut c = Copione::con_linea_k(9, dpn);
+        c.testo(
+            "0100",
+            &risposta(vec![riga(ecu, &[0x41, 0x00, 0xBE, 0x3E, 0xB8, 0x11])]),
+        );
+        c.testo(
+            "0101",
+            &risposta(vec![riga(ecu, &[0x41, 0x01, 0x82, 0x07, 0x65, 0x00])]),
+        );
+        // Tre codici per messaggio, senza byte di conteggio; 00 00 = riempitivo.
+        c.testo(
+            "03",
+            &risposta(vec![
+                riga(ecu, &[0x43, 0x04, 0x20, 0x01, 0x71, 0x03, 0x00]),
+                riga(ecu, &[0x43, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00]),
+            ]),
+        );
+        c.testo(
+            "07",
+            &risposta(vec![riga(ecu, &[0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])]),
+        );
+        // VIN: 49 02 <n> e quattro byte; il primo messaggio ha tre zeri di
+        // riempimento. Messi fuori ordine apposta.
+        let v = VIN.as_bytes();
+        let mut pezzi = vec![riga(ecu, &[0x49, 0x02, 0x01, 0x00, 0x00, 0x00, v[0]])];
+        for n in 0..4usize {
+            let p = &v[1 + n * 4..5 + n * 4];
+            pezzi.push(riga(
+                ecu,
+                &[0x49, 0x02, n as u8 + 2, p[0], p[1], p[2], p[3]],
+            ));
+        }
+        pezzi.swap(1, 3);
+        c.testo("0902", &risposta(pezzi));
+        c
+    }
+
+    fn leggi_da(c: Copione, protocollo: &str) -> DiagnosisReport {
+        let mut e = Elm::new(Box::new(c));
+        e.inizializza().unwrap();
+        let (p, iniziali) = e.collega_centralina().unwrap();
+        assert!(p.linea_k());
+        let s = e.pid_supportati(&iniziali).unwrap();
+        leggi(
+            &mut e,
+            &Contesto {
+                adattatore: "ELM327 v1.5",
+                protocollo,
+                supportati: &s,
+            },
+        )
+        .unwrap()
+    }
+
+    fn verifica(r: &DiagnosisReport, ecu: &str) {
+        let codici: Vec<&str> = r.dtc.iter().map(|d| d.codice.as_str()).collect();
+        assert_eq!(codici, vec!["P0171", "P0300", "P0420", "P0700"]);
+        assert!(r.dtc.iter().all(|d| d.ecu == ecu));
+        assert!(r.dtc.iter().all(|d| d.stati == vec![StatoDtc::Confermato]));
+        assert_eq!(r.lettura_confermati.stato, Stato::Ok);
+        assert_eq!(r.lettura_in_sospeso.stato, Stato::Ok);
+        assert!(r.prontezza[0].mil_accesa);
+        assert_eq!(r.vin.as_deref(), Some(VIN));
+        // Il VIN resta fuori dal rapporto salvato, come su CAN.
+        assert!(!serde_json::to_string(r).unwrap().contains(VIN));
+    }
+
+    #[test]
+    fn lettura_completa_su_iso_9141() {
+        let r = leggi_da(veicolo("A3", 0x10, riga_iso9141), "ISO 9141-2");
+        verifica(&r, "10");
+    }
+
+    #[test]
+    fn lettura_completa_su_kwp2000() {
+        let r = leggi_da(veicolo("A5", 0x11, riga_kwp), "ISO 14230-4 KWP");
+        verifica(&r, "11");
+    }
+
+    #[test]
+    fn vin_incompleto_non_viene_inventato() {
+        let mut c = veicolo("A3", 0x10, riga_iso9141);
+        c.testo(
+            "0902",
+            &format!(
+                "{}\r\r>",
+                riga_iso9141(0x10, &[0x49, 0x02, 0x01, 0x00, 0x00, 0x00, b'Z'])
+            ),
+        );
+        let r = leggi_da(c, "ISO 9141-2");
+        assert_eq!(r.vin, None);
     }
 }

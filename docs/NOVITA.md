@@ -174,3 +174,25 @@ runtime asincrono.
   restano come protezione.
 - Non ancora provato sull'adattatore: lo scambio dei comandi ELM327 via BLE
   dopo questa correzione.
+
+## Linea K (ISO 9141-2 e KWP2000) — non ancora in un rilascio
+
+Ricerca in [RICERCA_K_LINE.md](RICERCA_K_LINE.md). Con un ELM327 la linea K
+arriva all'app come righe di testo in un altro formato; OBDio ne gestiva già
+una parte.
+
+- Il VIN si legge anche fuori da CAN, dove arriva in più messaggi numerati.
+  Resta escluso da registri, esportazioni e MQTT.
+- I messaggi dell'inizializzazione riuscita (`BUS INIT: ...OK`) non sono più
+  scambiati per errori; quella fallita suggerisce di accendere il quadro.
+- Una riga con checksum errato (`<DATA ERROR`) viene scartata senza perdere
+  le altre.
+- Dalla seconda lettura di un dato corrente la richiesta dice all'adattatore
+  quante risposte aspettare, per non perdere tempo su un bus lento. Se
+  l'adattatore non conosce la funzione, non viene più usata.
+- La scheda del collegamento avvisa che sulla linea K i valori si aggiornano
+  più lentamente.
+- Provato solo con veicoli simulati (ISO 9141-2 e KWP2000). **Mai provato su
+  un veicolo a linea K**, e non è confermato che l'adattatore Carista la
+  supporti. Mancano ancora il servizio 06 fuori da CAN e la scelta manuale
+  del protocollo.

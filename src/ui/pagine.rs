@@ -527,6 +527,12 @@ impl App {
             }
             righe.push(("Adattatore", info.adattatore.clone()));
             righe.push(("Protocollo", info.protocollo.clone()));
+            if info.protocollo.contains("ISO 9141") || info.protocollo.contains("ISO 14230") {
+                righe.push((
+                    "Nota",
+                    "Linea K: i valori si aggiornano più lentamente che su CAN".into(),
+                ));
+            }
             righe.push(("Centraline che rispondono", info.ecu.join(", ")));
             if riproduzione.is_some() {
                 righe.push((

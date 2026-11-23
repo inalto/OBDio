@@ -136,6 +136,12 @@ impl Protocollo {
             descrizione: descrizione.to_string(),
         })
     }
+
+    /// Vero per ISO 9141-2 e ISO 14230-4: un solo filo a 10,4 kbit/s, molto
+    /// più lento di CAN (docs/RICERCA_K_LINE.md).
+    pub fn linea_k(&self) -> bool {
+        (3..=5).contains(&self.numero)
+    }
 }
 
 /// Risposta a una richiesta OBD, già divisa per centralina.
@@ -255,6 +261,13 @@ pub struct Elm {
     registro: Vec<String>,
     /// Copia immediata di ogni riga del registro (registro dei collegamenti).
     diario: Diario,
+    /// Fuori da CAN: quante righe ha prodotto l'ultima risposta completa a
+    /// ogni richiesta di dati correnti. Detto all'adattatore in coda alla
+    /// richiesta, gli evita di aspettare altre risposte che non arriveranno.
+    attese: std::collections::HashMap<String, u8>,
+    /// Falso dopo che l'adattatore ha rifiutato una richiesta con il numero
+    /// di risposte attese (funzione dell'ELM327 dalla v1.3; alcuni cloni no).
+    conteggio_ammesso: bool,
 }
 
 impl Elm {
@@ -265,6 +278,8 @@ impl Elm {
             traccia: true,
             registro: Vec::new(),
             diario: Diario::muto(),
+            attese: Default::default(),
+            conteggio_ammesso: true,
         }
     }
 
@@ -430,8 +445,42 @@ impl Elm {
     /// Esegue una richiesta OBD di sola lettura.
     pub fn richiesta(&mut self, r: ObdRequest) -> Result<Risposta, ElmError> {
         let riservato = r == ObdRequest::Vin;
-        let righe = self.scambia(&r.command(), T_OBD, riservato)?;
-        let dati = classifica(righe)?;
+        let base = r.command();
+        // Solo per i dati correnti, che sono quelli letti a ripetizione.
+        let con_conteggio = !self.kind.is_can()
+            && self.conteggio_ammesso
+            && matches!(r, ObdRequest::CurrentData(_));
+        let attese = self.attese.get(&base).copied().filter(|_| con_conteggio);
+        let dati = match attese {
+            Some(n) => {
+                let righe = self.scambia(&format!("{base}{n:X}"), T_OBD, riservato)?;
+                match classifica(righe) {
+                    Ok(d) if d.len() >= n as usize => d,
+                    // Meno righe del previsto: la volta dopo si aspetta di nuovo.
+                    Ok(d) => {
+                        self.attese.remove(&base);
+                        d
+                    }
+                    // «?»: l'adattatore non conosce il numero in coda.
+                    Err(ElmError::Adattatore(_)) => {
+                        self.conteggio_ammesso = false;
+                        self.attese.clear();
+                        classifica(self.scambia(&base, T_OBD, riservato)?)?
+                    }
+                    Err(e) => {
+                        self.attese.remove(&base);
+                        return Err(e);
+                    }
+                }
+            }
+            None => {
+                let d = classifica(self.scambia(&base, T_OBD, riservato)?)?;
+                if con_conteggio && (1..=9).contains(&d.len()) {
+                    self.attese.insert(base, d.len() as u8);
+                }
+                d
+            }
+        };
         let tutti = assemble(&dati, self.kind).map_err(|e| ElmError::Trama(e.to_string()))?;
         let mut risposta = Risposta::default();
         for m in tutti {
@@ -560,12 +609,38 @@ impl Elm {
     }
 }
 
+/// Aggiunge al messaggio dell'adattatore che cosa controllare, per gli errori
+/// tipici della linea K.
+fn spiega_errore_di_bus(riga: &str) -> String {
+    let r = riga.to_uppercase();
+    if r.contains("BUS INIT") {
+        format!(
+            "inizializzazione della linea K non riuscita ({riga}): controlla che il quadro sia \
+             acceso"
+        )
+    } else if r.contains("BUS BUSY") {
+        format!("bus occupato ({riga}): controlla il contatto del connettore OBD")
+    } else {
+        riga.to_string()
+    }
+}
+
 /// Separa le righe di dati dai messaggi testuali dell'adattatore.
 fn classifica(righe: Vec<String>) -> Result<Vec<String>, ElmError> {
     let mut dati = Vec::new();
+    let mut righe_errate = 0usize;
     for riga in righe {
         let r = riga.to_uppercase();
-        if r.starts_with("SEARCHING") || r == "BUS INIT: OK" || r == "OK" {
+        // Con un protocollo fissato l'inizializzazione lenta della linea K
+        // stampa «BUS INIT: ...OK», quella rapida «BUS INIT: OK».
+        let inizio_riuscito = r.starts_with("BUS INIT") && r.ends_with("OK");
+        if r.starts_with("SEARCHING") || inizio_riuscito || r == "OK" {
+            continue;
+        }
+        // «<DATA ERROR» in coda a una riga: checksum o formato errato di quel
+        // solo messaggio. Si scarta la riga, non l'intera risposta.
+        if r.contains("<DATA ERROR") {
+            righe_errate += 1;
             continue;
         }
         if r.contains("NO DATA") {
@@ -593,9 +668,14 @@ fn classifica(righe: Vec<String>) -> Result<Vec<String>, ElmError> {
             "ACT ALERT",
         ];
         if ERRORI.iter().any(|e| r.contains(e)) || r.starts_with("ERR") {
-            return Err(ElmError::Bus(riga));
+            return Err(ElmError::Bus(spiega_errore_di_bus(&riga)));
         }
         dati.push(riga);
+    }
+    if dati.is_empty() && righe_errate > 0 {
+        return Err(ElmError::Bus(
+            "risposta ricevuta con checksum errato (DATA ERROR): disturbo sulla linea".into(),
+        ));
     }
     if dati.is_empty() {
         return Err(ElmError::Adattatore("risposta vuota".into()));
@@ -835,5 +915,179 @@ mod tests {
         assert_eq!(r.messaggi[0].data.len(), 20);
         let registro = e.prendi_registro().join("\n");
         assert!(registro.contains("omessa") && !registro.contains("56 46 33"));
+    }
+}
+
+/// Veicoli a linea K simulati (docs/RICERCA_K_LINE.md). Nessuna di queste
+/// prove sostituisce quella su un veicolo vero.
+#[cfg(test)]
+mod prove_linea_k {
+    use super::*;
+    use crate::transport::copione::{Battuta, Copione, riga_iso9141, riga_kwp};
+
+    fn risposta(righe: &[String]) -> String {
+        format!("{}\r\r>", righe.join("\r"))
+    }
+
+    fn collegato(mut c: Copione, prima: String) -> (Elm, Protocollo, Vec<EcuMessage>) {
+        c.testo("0100", &format!("SEARCHING...\r{prima}\r\r>"));
+        let mut e = Elm::new(Box::new(c));
+        e.inizializza().unwrap();
+        let (p, m) = e.collega_centralina().unwrap();
+        (e, p, m)
+    }
+
+    #[test]
+    fn iso9141_riconosciuto_con_l_esempio_del_datasheet() {
+        let c = Copione::con_linea_k(8, "A3");
+        // Riga dell'esempio a pagina 42 del datasheet ELM327.
+        let (e, p, m) = collegato(c, "48 6B 10 41 00 BE 3E B8 11 FA".into());
+        assert_eq!(p.numero, 3);
+        assert!(p.linea_k());
+        assert_eq!(e.kind(), BusKind::Legacy);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].ecu, "10");
+        assert_eq!(m[0].data, vec![0x41, 0x00, 0xBE, 0x3E, 0xB8, 0x11]);
+    }
+
+    #[test]
+    fn kwp_riconosciuto_e_can_non_e_linea_k() {
+        let c = Copione::con_linea_k(8, "A5");
+        let prima = riga_kwp(0x11, &[0x41, 0x00, 0xBE, 0x3E, 0xB8, 0x11]);
+        let (e, p, m) = collegato(c, prima);
+        assert_eq!(p.numero, 5);
+        assert!(p.linea_k());
+        assert_eq!(e.kind(), BusKind::Legacy);
+        assert_eq!(m[0].ecu, "11");
+        assert!(!Protocollo::da_dpn("A6").unwrap().linea_k());
+    }
+
+    #[test]
+    fn dalla_seconda_lettura_dice_quante_risposte_aspettare() {
+        let mut c = Copione::con_linea_k(8, "A3");
+        c.testo(
+            "010C",
+            &risposta(&[riga_iso9141(0x10, &[0x41, 0x0C, 0x1F, 0x40])]),
+        );
+        // La richiesta con il conteggio risponde con un valore diverso, così
+        // la prova vede quale delle due è stata inviata.
+        c.testo(
+            "010C1",
+            &risposta(&[riga_iso9141(0x10, &[0x41, 0x0C, 0x20, 0x00])]),
+        );
+        // Due centraline: il conteggio è 2.
+        c.testo(
+            "0105",
+            &risposta(&[
+                riga_iso9141(0x10, &[0x41, 0x05, 0x7B]),
+                riga_iso9141(0x18, &[0x41, 0x05, 0x7A]),
+            ]),
+        );
+        c.testo(
+            "01052",
+            &risposta(&[
+                riga_iso9141(0x10, &[0x41, 0x05, 0x50]),
+                riga_iso9141(0x18, &[0x41, 0x05, 0x51]),
+            ]),
+        );
+        let prima = riga_iso9141(0x10, &[0x41, 0x00, 0xBE, 0x3E, 0xB8, 0x11]);
+        let (mut e, _, _) = collegato(c, prima);
+        let giri = ObdRequest::CurrentData(0x0C);
+        assert_eq!(e.richiesta(giri).unwrap().messaggi[0].data[2], 0x1F);
+        assert_eq!(e.richiesta(giri).unwrap().messaggi[0].data[2], 0x20);
+        let acqua = ObdRequest::CurrentData(0x05);
+        assert_eq!(e.richiesta(acqua).unwrap().messaggi.len(), 2);
+        let seconda = e.richiesta(acqua).unwrap();
+        assert_eq!(seconda.messaggi[1].data[2], 0x51);
+    }
+
+    #[test]
+    fn su_can_il_conteggio_non_si_usa() {
+        let mut c = Copione::con_inizializzazione(8);
+        c.testo("0100", "7E8 06 41 00 BE 3F A8 13\r\r>");
+        c.testo("010C", "7E8 04 41 0C 1F 40\r\r>");
+        c.sequenza("010C1", vec![Battuta::Caduta]);
+        let mut e = Elm::new(Box::new(c));
+        e.inizializza().unwrap();
+        e.collega_centralina().unwrap();
+        for _ in 0..3 {
+            let r = e.richiesta(ObdRequest::CurrentData(0x0C)).unwrap();
+            assert_eq!(r.messaggi[0].data[2], 0x1F);
+        }
+    }
+
+    #[test]
+    fn adattatore_che_rifiuta_il_conteggio() {
+        let mut c = Copione::con_linea_k(8, "A3");
+        c.testo(
+            "010D",
+            &risposta(&[riga_iso9141(0x10, &[0x41, 0x0D, 0x32])]),
+        );
+        // «?» una volta; un secondo invio con il conteggio farebbe cadere il
+        // collegamento, cioè fallire la prova.
+        c.sequenza(
+            "010D1",
+            vec![Battuta::Testo("?\r\r>".into()), Battuta::Caduta],
+        );
+        let prima = riga_iso9141(0x10, &[0x41, 0x00, 0xBE, 0x3E, 0xB8, 0x11]);
+        let (mut e, _, _) = collegato(c, prima);
+        let velocita = ObdRequest::CurrentData(0x0D);
+        for _ in 0..4 {
+            assert_eq!(e.richiesta(velocita).unwrap().messaggi[0].data[2], 0x32);
+        }
+    }
+
+    #[test]
+    fn senza_risposta_con_il_conteggio_si_torna_ad_aspettare() {
+        let mut c = Copione::con_linea_k(8, "A3");
+        c.sequenza(
+            "0111",
+            vec![
+                Battuta::Testo(risposta(&[riga_iso9141(0x10, &[0x41, 0x11, 0x40])])),
+                Battuta::Testo(risposta(&[riga_iso9141(0x10, &[0x41, 0x11, 0x80])])),
+            ],
+        );
+        c.sequenza(
+            "01111",
+            vec![Battuta::Testo("NO DATA\r\r>".into()), Battuta::Caduta],
+        );
+        let prima = riga_iso9141(0x10, &[0x41, 0x00, 0xBE, 0x3E, 0xB8, 0x11]);
+        let (mut e, _, _) = collegato(c, prima);
+        let farfalla = ObdRequest::CurrentData(0x11);
+        assert_eq!(e.richiesta(farfalla).unwrap().messaggi[0].data[2], 0x40);
+        assert_eq!(e.richiesta(farfalla), Err(ElmError::NoData));
+        // Di nuovo senza conteggio: risponde la seconda battuta di «0111».
+        assert_eq!(e.richiesta(farfalla).unwrap().messaggi[0].data[2], 0x80);
+    }
+
+    #[test]
+    fn messaggi_dell_inizializzazione_e_righe_con_checksum_errato() {
+        let riga = riga_iso9141(0x10, &[0x41, 0x0C, 0x1F, 0x40]);
+        // Inizializzazione lenta e rapida riuscite: non sono dati.
+        for inizio in ["BUS INIT: ...OK", "BUS INIT: OK"] {
+            let d = classifica(vec![inizio.to_string(), riga.clone()]).unwrap();
+            assert_eq!(d, vec![riga.clone()]);
+        }
+        // Una riga rovinata non butta via quella buona.
+        let d = classifica(vec![
+            "48 6B 18 41 0C 00 00 FF <DATA ERROR".to_string(),
+            riga.clone(),
+        ])
+        .unwrap();
+        assert_eq!(d, vec![riga]);
+        // Solo righe rovinate: errore di bus, non «risposta vuota».
+        let e = classifica(vec!["48 6B 18 41 0C 00 <DATA ERROR".to_string()]).unwrap_err();
+        assert!(matches!(e, ElmError::Bus(m) if m.contains("checksum")));
+    }
+
+    #[test]
+    fn errori_di_inizializzazione_con_il_suggerimento() {
+        let e = classifica(vec!["BUS INIT: ...ERROR".to_string()]).unwrap_err();
+        assert!(matches!(&e, ElmError::Bus(m) if m.contains("quadro") && m.contains("BUS INIT")));
+        let e = classifica(vec!["BUS BUSY".to_string()]).unwrap_err();
+        assert!(matches!(&e, ElmError::Bus(m) if m.contains("connettore")));
+        // Gli altri errori restano com'erano.
+        let e = classifica(vec!["CAN ERROR".to_string()]).unwrap_err();
+        assert_eq!(e, ElmError::Bus("CAN ERROR".into()));
     }
 }

@@ -56,6 +56,14 @@ impl Copione {
         c
     }
 
+    /// Come [`Copione::con_inizializzazione`], per un veicolo a linea K:
+    /// `dpn` è la risposta ad ATDPN (`A3` ISO 9141-2, `A4`/`A5` KWP2000).
+    pub fn con_linea_k(frammento: usize, dpn: &str) -> Self {
+        let mut c = Self::con_inizializzazione(frammento);
+        c.testo("ATDPN", &format!("{dpn}\r\r>"));
+        c
+    }
+
     /// Risposta fissa a un comando (ripetuta a ogni invio).
     pub fn testo(&mut self, cmd: &str, risposta: &str) -> &mut Self {
         self.risposte.insert(
@@ -70,6 +78,28 @@ impl Copione {
         self.risposte.insert(cmd.to_string(), battute.into());
         self
     }
+}
+
+/// Riga di risposta ISO 9141-2 come la stampa l'ELM327 con le intestazioni:
+/// `48 6B <ecu>`, dati e checksum (somma a 8 bit).
+pub fn riga_iso9141(ecu: u8, dati: &[u8]) -> String {
+    riga_con_checksum(&[0x48, 0x6B, ecu], dati)
+}
+
+/// Riga di risposta KWP2000 (ISO 14230-4): `8x F1 <ecu>`, dove `x` è il numero
+/// di byte di dati, poi dati e checksum.
+pub fn riga_kwp(ecu: u8, dati: &[u8]) -> String {
+    riga_con_checksum(&[0x80 | (dati.len() as u8 & 0x3F), 0xF1, ecu], dati)
+}
+
+fn riga_con_checksum(intestazione: &[u8], dati: &[u8]) -> String {
+    let mut byte: Vec<u8> = intestazione.iter().chain(dati).copied().collect();
+    let somma = byte.iter().fold(0u8, |s, b| s.wrapping_add(*b));
+    byte.push(somma);
+    byte.iter()
+        .map(|b| format!("{b:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl Transport for Copione {
