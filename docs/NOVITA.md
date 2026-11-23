@@ -175,7 +175,7 @@ runtime asincrono.
 - Non ancora provato sull'adattatore: lo scambio dei comandi ELM327 via BLE
   dopo questa correzione.
 
-## Linea K (ISO 9141-2 e KWP2000) — non ancora in un rilascio
+## 1.1.0 — Linea K (ISO 9141-2 e KWP2000)
 
 Ricerca in [RICERCA_K_LINE.md](RICERCA_K_LINE.md). Con un ELM327 la linea K
 arriva all'app come righe di testo in un altro formato; OBDio ne gestiva già
