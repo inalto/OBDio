@@ -197,7 +197,7 @@ una parte.
   supporti. Mancano ancora il servizio 06 fuori da CAN e la scelta manuale
   del protocollo.
 
-## Td5 (Land Rover) — non ancora in un rilascio
+## 1.2.0 — Land Rover Td5 in sola lettura (OBDLink CX/LX)
 
 Ricerca e stato in [RICERCA_TD5.md](RICERCA_TD5.md). **Mai provata su un
 adattatore o su un veicolo**: tutto è verificato con un OBDLink e una

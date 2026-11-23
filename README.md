@@ -18,7 +18,7 @@ permette di inviare comandi liberi.
 [rilasci su GitHub](https://github.com/inalto/OBDio/releases/latest)
 (file `OBDio-<versione>-windows-x64.zip`). Licenza: [MIT](LICENSE).
 
-Versione 1.1.0. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
+Versione 1.2.0. Primo caso d'uso: Peugeot 208 1.2 benzina 82 CV (motore HMZ)
 con codice P0420. Le novità rispetto alla prima versione, fase per fase, sono
 in [docs/NOVITA.md](docs/NOVITA.md).
 
